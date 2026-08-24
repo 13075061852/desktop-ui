@@ -6,12 +6,14 @@ namespace DeskNest.App;
 public partial class App : System.Windows.Application
 {
     private Mutex? _singleInstanceMutex;
+    private bool _ownsMutex;
 
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
 
         _singleInstanceMutex = new Mutex(initiallyOwned: true, "Local\\DeskNest.SingleInstance", out var isFirstInstance);
+        _ownsMutex = isFirstInstance;
         if (!isFirstInstance)
         {
             System.Windows.MessageBox.Show(
@@ -30,7 +32,11 @@ public partial class App : System.Windows.Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        _singleInstanceMutex?.ReleaseMutex();
+        if (_ownsMutex)
+        {
+            _singleInstanceMutex?.ReleaseMutex();
+        }
+
         _singleInstanceMutex?.Dispose();
         base.OnExit(e);
     }

@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
 using DeskNest.App.Controls;
+using DeskNest.App.Interop;
 using DeskNest.App.Services;
 using DeskNest.Core.Models;
 using DeskNest.Core.Services;
@@ -86,6 +87,7 @@ public partial class MainWindow : System.Windows.Window
             () => Dispatcher.Invoke(() => OrganizeDesktop(showNotification: true)),
             () => Dispatcher.Invoke(ToggleDesktopIcons),
             () => Dispatcher.Invoke(ExitApplication));
+        _ = TrimWorkingSetAfterStartupAsync();
 
         if (isFirstRun)
         {
@@ -360,6 +362,14 @@ public partial class MainWindow : System.Windows.Window
     {
         _saveTimer.Stop();
         _saveTimer.Start();
+    }
+
+    private static async Task TrimWorkingSetAfterStartupAsync()
+    {
+        await Task.Delay(TimeSpan.FromSeconds(6));
+        GC.Collect(2, GCCollectionMode.Optimized, blocking: true, compacting: false);
+        GC.WaitForPendingFinalizers();
+        NativeMethods.EmptyWorkingSet(NativeMethods.GetCurrentProcess());
     }
 
     private async Task SaveStateAsync()
