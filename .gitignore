@@ -1,0 +1,17 @@
+# Build output
+**/bin/
+**/obj/
+dist/
+
+# IDE/user files
+.vs/
+.idea/
+*.user
+*.suo
+
+# Local state
+*.tmp
+*.bak
+
+# Local toolchain
+.tools/
