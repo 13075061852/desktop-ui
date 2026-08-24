@@ -31,6 +31,51 @@ var tests = new List<(string Name, Action Run)>
         {
             Directory.Delete(root, recursive: true);
         }
+    }),
+    ("state store round-trips state", () =>
+    {
+        WithTempDirectory(root =>
+        {
+            var path = Path.Combine(root, "state.json");
+            var store = new JsonStateStore(path);
+            var expected = AppState.CreateDefault();
+            expected.LayoutLocked = true;
+            expected.Zones[0].Name = "高频工具";
+
+            store.SaveAsync(expected).GetAwaiter().GetResult();
+            var actual = store.LoadAsync().GetAwaiter().GetResult();
+
+            Assert.Equal(true, actual.LayoutLocked);
+            Assert.Equal("高频工具", actual.Zones[0].Name);
+        });
+    }),
+    ("state store recovers malformed primary from backup", () =>
+    {
+        WithTempDirectory(root =>
+        {
+            var path = Path.Combine(root, "state.json");
+            var store = new JsonStateStore(path);
+            var first = AppState.CreateDefault();
+            first.Theme = "Dark";
+            store.SaveAsync(first).GetAwaiter().GetResult();
+
+            var second = AppState.CreateDefault();
+            second.Theme = "Light";
+            store.SaveAsync(second).GetAwaiter().GetResult();
+            File.WriteAllText(path, "{not-json");
+
+            var recovered = store.LoadAsync().GetAwaiter().GetResult();
+            Assert.Equal("Dark", recovered.Theme);
+        });
+    }),
+    ("missing state returns safe defaults", () =>
+    {
+        WithTempDirectory(root =>
+        {
+            var store = new JsonStateStore(Path.Combine(root, "missing.json"));
+            var state = store.LoadAsync().GetAwaiter().GetResult();
+            Assert.Equal(5, state.Zones.Count);
+        });
     })
 };
 
@@ -51,6 +96,20 @@ foreach (var test in tests)
 
 Console.WriteLine($"\n{tests.Count - failed}/{tests.Count} tests passed.");
 return failed == 0 ? 0 : 1;
+
+static void WithTempDirectory(Action<string> action)
+{
+    var root = Path.Combine(Path.GetTempPath(), "DeskNestTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        action(root);
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+}
 
 internal static class Assert
 {
