@@ -8,7 +8,7 @@ public readonly record struct ZoneAlignmentResult(
 public static class ZoneAlignmentResolver
 {
     private const double Tolerance = 0.01;
-    private const double MinimumWidth = 200;
+    private const double MinimumWidth = 150;
     private const double MinimumHeight = 150;
 
     public static ZoneAlignmentResult Snap(

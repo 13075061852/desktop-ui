@@ -4,6 +4,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using DeskNest.App.Interop;
+using DeskNest.Core.Models;
 
 namespace DeskNest.App.Services;
 
@@ -18,7 +19,9 @@ internal sealed class ShellIconService
             return cached;
         }
 
-        var source = TryGetSystemImageListIcon(path) ?? TryGetLargeShellIcon(path);
+        var source = string.Equals(path, DesktopItem.RecycleBinShellPath, StringComparison.OrdinalIgnoreCase)
+            ? TryGetRecycleBinIcon()
+            : TryGetSystemImageListIcon(path) ?? TryGetLargeShellIcon(path);
         if (source is not null)
         {
             source.Freeze();
@@ -26,6 +29,34 @@ internal sealed class ShellIconService
         }
 
         return source;
+    }
+
+    private static BitmapSource? TryGetRecycleBinIcon()
+    {
+        var iconInfo = new NativeMethods.StockIconInfo
+        {
+            Size = (uint)Marshal.SizeOf<NativeMethods.StockIconInfo>(),
+            Path = string.Empty
+        };
+        if (NativeMethods.SHGetStockIconInfo(
+                NativeMethods.SiidRecycler,
+                NativeMethods.ShgsiIcon | NativeMethods.ShgsiLargeIcon,
+                ref iconInfo) < 0 || iconInfo.IconHandle == 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            return Imaging.CreateBitmapSourceFromHIcon(
+                iconInfo.IconHandle,
+                Int32Rect.Empty,
+                BitmapSizeOptions.FromEmptyOptions());
+        }
+        finally
+        {
+            NativeMethods.DestroyIcon(iconInfo.IconHandle);
+        }
     }
 
     private static BitmapSource? TryGetSystemImageListIcon(string path)

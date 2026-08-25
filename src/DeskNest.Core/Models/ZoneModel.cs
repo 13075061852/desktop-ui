@@ -20,5 +20,7 @@ public sealed class ZoneModel
 
     public bool IsCollapsed { get; set; }
 
+    public string ViewMode { get; set; } = "Icons";
+
     public List<DesktopItem> Items { get; set; } = [];
 }

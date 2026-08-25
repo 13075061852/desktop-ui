@@ -120,8 +120,9 @@ public sealed class JsonStateStore
             zone.CategoryKey = string.IsNullOrWhiteSpace(zone.CategoryKey) ? "other" : zone.CategoryKey;
             zone.Name = string.IsNullOrWhiteSpace(zone.Name) ? "未命名分区" : zone.Name.Trim();
             zone.AccentColor = string.IsNullOrWhiteSpace(zone.AccentColor) ? "#7DD3FC" : zone.AccentColor;
-            zone.Width = Math.Max(200, zone.Width);
+            zone.Width = Math.Max(150, zone.Width);
             zone.Height = Math.Max(120, zone.Height);
+            zone.ViewMode = zone.ViewMode is "List" or "Icons" ? zone.ViewMode : "Icons";
             zone.Items ??= [];
 
             foreach (var item in zone.Items)

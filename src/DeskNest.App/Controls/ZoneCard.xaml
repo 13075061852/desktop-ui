@@ -4,7 +4,10 @@
              xmlns:primitives="clr-namespace:System.Windows.Controls.Primitives;assembly=PresentationFramework"
              AllowDrop="True"
              Drop="OnDrop"
-             DragOver="OnDragOver">
+             DragOver="OnDragOver"
+             DragLeave="OnDragLeave"
+             MouseEnter="OnCardMouseEnter"
+             MouseLeave="OnCardMouseLeave">
     <UserControl.Resources>
         <Style x:Key="HeaderActionButtonStyle" TargetType="Button">
             <Setter Property="Width" Value="28" />
@@ -105,49 +108,38 @@
                 </Grid.RowDefinitions>
 
                 <Border x:Name="HeaderSurface" Grid.Row="0" Background="#EDF7F9FC" CornerRadius="10,10,0,0"
+                        MouseEnter="OnHeaderMouseEnter" MouseLeave="OnHeaderMouseLeave"
                         MouseLeftButtonDown="OnHeaderMouseDown"
                         MouseMove="OnHeaderMouseMove"
                         MouseLeftButtonUp="OnHeaderMouseUp">
                     <Grid>
-                        <Grid Margin="14,0,9,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
+                        <Grid x:Name="HeaderTitleHost" HorizontalAlignment="Left" VerticalAlignment="Center"
+                              Margin="14,0,0,0">
+                            <Grid.RenderTransform>
+                                <TranslateTransform x:Name="HeaderTitleTranslation" />
+                            </Grid.RenderTransform>
+                            <TextBlock x:Name="TitleText" FontWeight="SemiBold" FontSize="14"
+                                       TextTrimming="CharacterEllipsis"
+                                       MouseLeftButtonDown="OnTitleDoubleClick" />
+                            <TextBox x:Name="TitleEditor" Visibility="Collapsed" Height="29" MinWidth="120"
+                                     VerticalContentAlignment="Center" Padding="7,0"
+                                     Background="#DFFFFFFF"
+                                     Foreground="{StaticResource TextPrimaryBrush}"
+                                     BorderBrush="{StaticResource StrokeBrush}" BorderThickness="1"
+                                     LostKeyboardFocus="OnTitleEditorLostFocus"
+                                     KeyDown="OnTitleEditorKeyDown" />
+                        </Grid>
 
-                            <Ellipse x:Name="AccentDot" Width="7" Height="7" Margin="0,0,10,0" />
-                            <Grid Grid.Column="1" VerticalAlignment="Center" Margin="0,0,6,0">
-                                <TextBlock x:Name="TitleText" FontWeight="SemiBold" FontSize="14"
-                                           TextTrimming="CharacterEllipsis"
-                                           MouseLeftButtonDown="OnTitleDoubleClick" />
-                                <TextBox x:Name="TitleEditor" Visibility="Collapsed" Height="29"
-                                         VerticalContentAlignment="Center" Padding="7,0"
-                                         Background="#DFFFFFFF"
-                                         Foreground="{StaticResource TextPrimaryBrush}"
-                                         BorderBrush="{StaticResource StrokeBrush}" BorderThickness="1"
-                                         LostKeyboardFocus="OnTitleEditorLostFocus"
-                                         KeyDown="OnTitleEditorKeyDown" />
-                            </Grid>
-
-                            <Border x:Name="CountBadge" Grid.Column="2" MinWidth="26" Height="22" Padding="7,0"
-                                    Margin="2,0,3,0" CornerRadius="10" VerticalAlignment="Center"
-                                    Background="#15526170">
-                                <TextBlock x:Name="CountText" FontSize="10.5" FontWeight="SemiBold"
-                                           Foreground="{StaticResource TextMutedBrush}"
-                                           VerticalAlignment="Center" HorizontalAlignment="Center"
-                                           TextAlignment="Center" />
-                            </Border>
-
-                            <Button x:Name="CollapseButton" Grid.Column="3" Style="{StaticResource HeaderActionButtonStyle}"
+                        <StackPanel x:Name="HeaderAccessories" Orientation="Horizontal"
+                                    HorizontalAlignment="Right" VerticalAlignment="Center"
+                                    Margin="0,0,9,0" Opacity="0" IsHitTestVisible="False">
+                            <Button x:Name="CollapseButton" Style="{StaticResource HeaderActionButtonStyle}"
                                     ToolTip="折叠/展开" Click="OnCollapseClick">
                                 <Path x:Name="CollapseChevron" Data="M 2,6 L 6,2 L 10,6"
                                       Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                                       StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
                             </Button>
-                            <Button x:Name="MoreButton" Grid.Column="4" Style="{StaticResource HeaderActionButtonStyle}"
+                            <Button x:Name="MoreButton" Style="{StaticResource HeaderActionButtonStyle}"
                                     ToolTip="分区菜单" Click="OnMoreClick">
                                 <StackPanel Orientation="Horizontal">
                                     <Ellipse Width="3" Height="3" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
@@ -155,12 +147,13 @@
                                     <Ellipse Width="3" Height="3" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
                                 </StackPanel>
                             </Button>
-                        </Grid>
+                        </StackPanel>
                         <Border x:Name="HeaderDivider" Height="1" VerticalAlignment="Bottom" Background="#14526170" />
                     </Grid>
                 </Border>
 
-                <Grid x:Name="BodyArea" Grid.Row="1" ClipToBounds="True">
+                <Grid x:Name="BodyArea" Grid.Row="1" ClipToBounds="True"
+                      MouseRightButtonUp="OnBodyRightButtonUp">
                     <ScrollViewer x:Name="BodyScroller" Margin="10,4,10,12"
                                   VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled"
                                   ScrollChanged="OnBodyScrollChanged">
@@ -168,7 +161,16 @@
                     </ScrollViewer>
                     <ScrollBar x:Name="SlimScrollBar" Orientation="Vertical" HorizontalAlignment="Right"
                                Margin="0,9,5,10" Visibility="Collapsed"
-                               Style="{StaticResource SlimScrollBarStyle}" Scroll="OnSlimScroll" />
+                               Style="{StaticResource SlimScrollBarStyle}" Scroll="OnSlimScroll"
+                               LostMouseCapture="OnSlimScrollBarLostMouseCapture" />
+                    <Canvas x:Name="DropIndicatorCanvas" IsHitTestVisible="False">
+                        <Border x:Name="DropIndicator" Visibility="Collapsed" Opacity="0"
+                                Background="{StaticResource AccentBrush}" CornerRadius="2">
+                            <Border.Effect>
+                                <DropShadowEffect BlurRadius="9" ShadowDepth="0" Opacity="0.9" Color="#76D7C4" />
+                            </Border.Effect>
+                        </Border>
+                    </Canvas>
                 </Grid>
             </Grid>
         </Border>

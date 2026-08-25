@@ -3,6 +3,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
@@ -18,6 +19,8 @@ namespace DeskNest.App;
 
 public partial class MainWindow : System.Windows.Window
 {
+    private const int DeleteHotKeyId = 0x444E;
+
     private readonly JsonStateStore _stateStore = new();
     private readonly RuleClassifier _classifier = new();
     private readonly ShellIconService _iconService = new();
@@ -28,13 +31,21 @@ public partial class MainWindow : System.Windows.Window
     private readonly DesktopWallpaperService _wallpaperService = new();
     private readonly DispatcherTimer _saveTimer;
     private readonly DispatcherTimer _statusTimer;
+    private readonly DispatcherTimer _menuDismissTimer;
 
     private AppState _state = AppState.CreateDefault();
     private DesktopWatcher? _desktopWatcher;
     private TrayService? _trayService;
     private HwndSource? _windowSource;
+    private nint _mainWindowHandle;
     private bool _exitRequested;
     private bool _loaded;
+    private bool _transientMenuPointerArmed;
+    private bool _selectionPointerWasDown;
+    private bool _deleteHotKeyRegistered;
+    private Guid? _selectedZoneId;
+    private Guid? _selectedItemId;
+    private nint _selectionForegroundWindow;
 
     public MainWindow()
     {
@@ -52,9 +63,18 @@ public partial class MainWindow : System.Windows.Window
             _statusTimer.Stop();
             StatusBorder.Visibility = Visibility.Collapsed;
         };
+        _menuDismissTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(45) };
+        _menuDismissTimer.Tick += (_, _) =>
+        {
+            DismissTransientMenusOnOutsidePointerDown();
+            DismissSelectionOnContextChange();
+        };
+        _menuDismissTimer.Start();
 
         SourceInitialized += OnSourceInitialized;
         Loaded += OnLoaded;
+        Deactivated += (_, _) => CloseTransientMenus();
+        PreviewMouseLeftButtonDown += OnWindowPreviewMouseLeftButtonDown;
         Closing += OnClosing;
     }
 
@@ -66,6 +86,7 @@ public partial class MainWindow : System.Windows.Window
         Height = SystemParameters.VirtualScreenHeight;
 
         var handle = new WindowInteropHelper(this).Handle;
+        _mainWindowHandle = handle;
         _windowSource = HwndSource.FromHwnd(handle);
         _windowSource?.AddHook(OnWindowMessage);
         _desktopHost.TryEmbed(this);
@@ -73,6 +94,19 @@ public partial class MainWindow : System.Windows.Window
 
     private nint OnWindowMessage(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)
     {
+        if (message == NativeMethods.WmHotKey && wParam.ToInt32() == DeleteHotKeyId)
+        {
+            handled = true;
+            Dispatcher.BeginInvoke(DeleteSelectedItem);
+            return 0;
+        }
+
+        if (message == NativeMethods.WmActivateApp && wParam == 0)
+        {
+            Dispatcher.BeginInvoke(CloseTransientMenus);
+            return 0;
+        }
+
         if (message != NativeMethods.WmNcHitTest)
         {
             return 0;
@@ -89,6 +123,207 @@ public partial class MainWindow : System.Windows.Window
             ? NativeMethods.HtClient
             : NativeMethods.HtTransparent;
     }
+
+    private void ClearDragPreviewsExcept(ZoneCard activeCard)
+    {
+        foreach (var card in DesktopCanvas.Children.OfType<ZoneCard>())
+        {
+            if (card != activeCard)
+            {
+                card.ClearDragPreview();
+            }
+        }
+    }
+
+    private void ClearAllDragPreviews()
+    {
+        foreach (var card in DesktopCanvas.Children.OfType<ZoneCard>())
+        {
+            card.ClearDragPreview();
+        }
+    }
+
+    private void CloseTransientMenus()
+    {
+        foreach (var card in DesktopCanvas.Children.OfType<ZoneCard>())
+        {
+            card.CloseTransientMenus();
+        }
+    }
+
+    private void SelectItem(ZoneCard selectedCard, ZoneModel zone, DesktopItem item)
+    {
+        _selectedZoneId = zone.Id;
+        _selectedItemId = item.Id;
+        _selectionForegroundWindow = NativeMethods.GetForegroundWindow();
+        foreach (var card in DesktopCanvas.Children.OfType<ZoneCard>())
+        {
+            card.SetSelectedItem(card == selectedCard ? item.Id : null);
+        }
+
+        if (!_deleteHotKeyRegistered && _mainWindowHandle != 0)
+        {
+            _deleteHotKeyRegistered = NativeMethods.RegisterHotKey(
+                _mainWindowHandle,
+                DeleteHotKeyId,
+                modifiers: 0,
+                NativeMethods.VkDelete);
+        }
+    }
+
+    private void ClearItemSelection()
+    {
+        _selectedZoneId = null;
+        _selectedItemId = null;
+        _selectionForegroundWindow = 0;
+        foreach (var card in DesktopCanvas.Children.OfType<ZoneCard>())
+        {
+            card.SetSelectedItem(null);
+        }
+
+        if (_deleteHotKeyRegistered)
+        {
+            NativeMethods.UnregisterHotKey(_mainWindowHandle, DeleteHotKeyId);
+            _deleteHotKeyRegistered = false;
+        }
+    }
+
+    private void DeleteSelectedItem()
+    {
+        if (_selectedZoneId is not Guid zoneId || _selectedItemId is not Guid itemId)
+        {
+            return;
+        }
+
+        var zone = _state.Zones.FirstOrDefault(candidate => candidate.Id == zoneId);
+        var item = zone?.Items.FirstOrDefault(candidate => candidate.Id == itemId);
+        if (zone is null || item is null)
+        {
+            ClearItemSelection();
+            return;
+        }
+
+        if (DesktopItem.IsShellLocation(item.Path))
+        {
+            ShowStatus("系统项目不能使用 Delete 键删除");
+            return;
+        }
+
+        DeleteItem(zone, item);
+    }
+
+    private void OnWindowPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        for (var current = e.OriginalSource as DependencyObject;
+             current is not null;
+             current = VisualTreeHelper.GetParent(current))
+        {
+            if (current is FrameworkElement { Tag: DesktopItem })
+            {
+                return;
+            }
+        }
+
+        ClearItemSelection();
+    }
+
+    private void DismissSelectionOnContextChange()
+    {
+        if (_selectedItemId is null)
+        {
+            _selectionPointerWasDown = IsPointerButtonDown();
+            return;
+        }
+
+        var foreground = NativeMethods.GetForegroundWindow();
+        if (_selectionForegroundWindow != 0 &&
+            foreground != 0 &&
+            foreground != _selectionForegroundWindow &&
+            foreground != _mainWindowHandle)
+        {
+            ClearItemSelection();
+            return;
+        }
+
+        var pointerDown = IsPointerButtonDown();
+        if (!pointerDown)
+        {
+            _selectionPointerWasDown = false;
+            return;
+        }
+
+        if (_selectionPointerWasDown)
+        {
+            return;
+        }
+
+        _selectionPointerWasDown = true;
+        if (!NativeMethods.GetCursorPos(out var point))
+        {
+            ClearItemSelection();
+            return;
+        }
+
+        var clickedWindow = NativeMethods.WindowFromPoint(point);
+        NativeMethods.GetWindowThreadProcessId(clickedWindow, out var processId);
+        if (processId != (uint)Environment.ProcessId)
+        {
+            ClearItemSelection();
+        }
+    }
+
+    private void DismissTransientMenusOnOutsidePointerDown()
+    {
+        var hasOpenMenu = DesktopCanvas.Children
+            .OfType<ZoneCard>()
+            .Any(card => card.HasOpenTransientMenu);
+        if (!hasOpenMenu)
+        {
+            _transientMenuPointerArmed = false;
+            return;
+        }
+
+        var pointerDown = IsPointerButtonDown();
+        if (!pointerDown)
+        {
+            // Ignore the click that originally opened the menu. A later press is an outside-click candidate.
+            _transientMenuPointerArmed = true;
+            return;
+        }
+
+        if (!_transientMenuPointerArmed)
+        {
+            return;
+        }
+
+        _transientMenuPointerArmed = false;
+        if (!NativeMethods.GetCursorPos(out var point))
+        {
+            CloseTransientMenus();
+            return;
+        }
+
+        var clickedWindow = NativeMethods.WindowFromPoint(point);
+        if (clickedWindow == 0 || clickedWindow == _mainWindowHandle)
+        {
+            CloseTransientMenus();
+            return;
+        }
+
+        NativeMethods.GetWindowThreadProcessId(clickedWindow, out var processId);
+        if (processId != (uint)Environment.ProcessId)
+        {
+            CloseTransientMenus();
+        }
+    }
+
+    private static bool IsPointerButtonDown() =>
+        IsKeyDown(NativeMethods.VkLeftButton) ||
+        IsKeyDown(NativeMethods.VkRightButton) ||
+        IsKeyDown(NativeMethods.VkMiddleButton);
+
+    private static bool IsKeyDown(int virtualKey) =>
+        (NativeMethods.GetAsyncKeyState(virtualKey) & 0x8000) != 0;
 
     private bool IsInteractivePoint(Point point)
     {
@@ -131,6 +366,7 @@ public partial class MainWindow : System.Windows.Window
         _loaded = true;
         var isFirstRun = !File.Exists(_stateStore.StatePath);
         _state = await _stateStore.LoadAsync();
+        var shellItemsAdded = EnsureSystemShellItems();
         if (!string.IsNullOrWhiteSpace(_state.WallpaperSelection))
         {
             _wallpaperService.ApplySelection(_state.WallpaperSelection);
@@ -168,7 +404,7 @@ public partial class MainWindow : System.Windows.Window
         {
             _iconVisibility.SetVisible(false);
         }
-        if (layoutAdjusted)
+        if (layoutAdjusted || shellItemsAdded)
         {
             RequestSave();
         }
@@ -208,13 +444,27 @@ public partial class MainWindow : System.Windows.Window
             card.SetLayoutLocked(_state.LayoutLocked);
             card.SetVisualOptions(_state.PanelOpacity, _state.IconSize, lightTheme);
             card.AlignmentGuidesChanged = UpdateAlignmentGuides;
+            card.DragPreviewActivated = ClearDragPreviewsExcept;
+            card.DragPreviewEnded = ClearAllDragPreviews;
             card.ModelChanged += (_, _) => RequestSave();
             card.DeleteRequested += (_, _) => DeleteZone(zone);
+            card.NewFileRequested += (_, _) => CreateFileInZone(zone);
+            card.NewFolderRequested += (_, _) => CreateFolderInZone(zone);
+            card.NewShortcutRequested += (_, _) => CreateShortcutInZone(zone);
             card.FilesDropped += (_, args) => AddPathsToZone(zone, args.Paths);
-            card.ItemMoveRequested += (_, args) => MoveItem(zone, args.Payload);
+            card.ItemMoveRequested += (_, args) => MoveItem(zone, args.Payload, args.TargetIndex);
+            card.ItemSelected += (_, args) => SelectItem(card, zone, args.Item);
+            card.SelectionClearRequested += (_, _) => ClearItemSelection();
             card.ItemOpenRequested += (_, args) => OpenItem(args.Item);
+            card.ItemRenameRequested += (_, args) => RenameItem(zone, args.Item);
             card.ItemRevealRequested += (_, args) => RevealItem(args.Item);
+            card.ItemPropertiesRequested += (_, args) => ShowItemProperties(args.Item);
+            card.ItemDeleteRequested += (_, args) => DeleteItem(zone, args.Item);
             card.ItemRemoveRequested += (_, args) => RemoveItem(zone, args.Item);
+            if (_selectedZoneId == zone.Id)
+            {
+                card.SetSelectedItem(_selectedItemId);
+            }
 
             Canvas.SetLeft(card, Math.Max(ZoneCard.HorizontalDesktopInset, zone.X));
             Canvas.SetTop(card, Math.Max(72, zone.Y));
@@ -229,20 +479,40 @@ public partial class MainWindow : System.Windows.Window
 
     private ZoneAlignmentResult ConstrainZoneBounds(ZoneModel zone, ZoneBounds current, ZoneBounds desired)
     {
-        var obstacles = _state.Zones
+        var otherZones = _state.Zones
             .Where(other => other.Id != zone.Id)
+            .ToArray();
+        var obstacles = otherZones
             .Select(GetVisualBounds)
             .ToArray();
+
         var minimumX = ZoneCard.HorizontalDesktopInset;
+        const double minimumY = 72;
         var maximumRight = Math.Max(minimumX + 1, ActualWidth - ZoneCard.HorizontalDesktopInset);
-        var maximumBottom = Math.Max(73, ActualHeight);
+        var maximumBottom = Math.Max(minimumY + 1, ActualHeight);
+
+        var stackResize = ZoneStackResizeResolver.ReflowAdjacent(
+            current,
+            desired,
+            obstacles,
+            gap: 12,
+            minimumWidth: 150,
+            minimumHeight: 150,
+            minimumX,
+            minimumY,
+            maximumRight,
+            maximumBottom);
+        desired = stackResize.Desired;
+        obstacles = stackResize.Obstacles.ToArray();
+        ApplyCompressedObstacleBounds(otherZones, obstacles);
+
         var collisionSafe = ZoneCollisionResolver.Constrain(
             current,
             desired,
             obstacles,
             12,
             minimumX,
-            72,
+            minimumY,
             maximumRight,
             maximumBottom);
         return ZoneAlignmentResolver.Snap(
@@ -253,9 +523,51 @@ public partial class MainWindow : System.Windows.Window
             10,
             12,
             minimumX,
-            72,
+            minimumY,
             maximumRight,
             maximumBottom);
+    }
+
+    private void ApplyCompressedObstacleBounds(IReadOnlyList<ZoneModel> zones, IReadOnlyList<ZoneBounds> bounds)
+    {
+        for (var index = 0; index < zones.Count; index++)
+        {
+            var zone = zones[index];
+            var adjusted = bounds[index];
+            var current = GetVisualBounds(zone);
+            if (Math.Abs(current.X - adjusted.X) < 0.01 &&
+                Math.Abs(current.Y - adjusted.Y) < 0.01 &&
+                Math.Abs(current.Width - adjusted.Width) < 0.01 &&
+                Math.Abs(current.Height - adjusted.Height) < 0.01)
+            {
+                continue;
+            }
+
+            zone.X = adjusted.X;
+            zone.Y = adjusted.Y;
+            zone.Width = adjusted.Width;
+            if (!zone.IsCollapsed)
+            {
+                zone.Height = adjusted.Height;
+            }
+
+            var card = DesktopCanvas.Children
+                .OfType<ZoneCard>()
+                .FirstOrDefault(value => value.Model.Id == zone.Id);
+            if (card is null)
+            {
+                continue;
+            }
+
+            Canvas.SetLeft(card, zone.X);
+            Canvas.SetTop(card, zone.Y);
+            card.Width = zone.Width;
+            card.Height = zone.IsCollapsed ? 52 : zone.Height;
+            if (zone.ViewMode == "List" && Math.Abs(current.Width - adjusted.Width) >= 0.01)
+            {
+                card.RefreshItems();
+            }
+        }
     }
 
     private void UpdateAlignmentGuides(double? verticalGuide, double? horizontalGuide)
@@ -358,6 +670,33 @@ public partial class MainWindow : System.Windows.Window
         return new ZoneBounds(zone.X, zone.Y, zone.Width, zone.IsCollapsed ? 52 : zone.Height);
     }
 
+    private bool EnsureSystemShellItems()
+    {
+        if (_state.Zones.SelectMany(zone => zone.Items).Any(item =>
+                string.Equals(
+                    item.Path,
+                    DesktopItem.RecycleBinShellPath,
+                    StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        var target = _state.Zones.FirstOrDefault(zone =>
+                         zone.Name.Contains("系统工具", StringComparison.OrdinalIgnoreCase))
+                     ?? _state.Zones.FirstOrDefault(zone => zone.CategoryKey == "other")
+                     ?? _state.Zones.FirstOrDefault();
+        if (target is null)
+        {
+            return false;
+        }
+
+        target.Items.Add(DesktopItem.FromShellLocation(
+            DesktopItem.RecycleBinShellPath,
+            "回收站",
+            target.CategoryKey));
+        return true;
+    }
+
     private void OrganizeDesktop(bool showNotification)
     {
         var scanner = new DesktopScanner(_classifier);
@@ -397,6 +736,190 @@ public partial class MainWindow : System.Windows.Window
         }
     }
 
+    private void CreateFileInZone(ZoneModel zone)
+    {
+        var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        var defaultPath = GetUniquePath(desktop, "新建文本文档", ".txt");
+        var dialog = new RenameItemWindow(
+            Path.GetFileName(defaultPath),
+            preservesExtension: false,
+            dialogTitle: "新建文件",
+            actionTitle: "创建文件",
+            hint: "输入文件名，可包含文件扩展名")
+        {
+            Owner = this
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        var path = Path.Combine(desktop, dialog.NewName);
+        try
+        {
+            using (File.Open(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+            }
+
+            zone.Items.Add(DesktopItem.FromPath(path, zone.CategoryKey));
+            RefreshZone(zone);
+            RequestSave();
+            ShowStatus($"已在“{zone.Name}”中新建文件");
+        }
+        catch (IOException)
+        {
+            System.Windows.MessageBox.Show(
+                this,
+                "目标位置已经存在同名文件，请换一个名称。",
+                "无法新建文件",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            ShowStatus("无法新建文件，请检查桌面目录权限");
+        }
+    }
+
+    private void CreateFolderInZone(ZoneModel zone)
+    {
+        var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        var defaultPath = GetUniquePath(desktop, "新建文件夹", string.Empty);
+        var dialog = new RenameItemWindow(
+            Path.GetFileName(defaultPath),
+            preservesExtension: false,
+            dialogTitle: "新建文件夹",
+            actionTitle: "创建文件夹",
+            hint: "输入文件夹名称")
+        {
+            Owner = this
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        var path = Path.Combine(desktop, dialog.NewName);
+        if (File.Exists(path) || Directory.Exists(path))
+        {
+            System.Windows.MessageBox.Show(
+                this,
+                "目标位置已经存在同名项目，请换一个名称。",
+                "无法新建文件夹",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(path);
+            zone.Items.Add(DesktopItem.FromPath(path, zone.CategoryKey));
+            RefreshZone(zone);
+            RequestSave();
+            ShowStatus($"已在“{zone.Name}”中新建文件夹");
+        }
+        catch (IOException)
+        {
+            System.Windows.MessageBox.Show(
+                this,
+                "目标位置已经存在同名项目，请换一个名称。",
+                "无法新建文件夹",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            ShowStatus("无法新建文件夹，请检查桌面目录权限");
+        }
+    }
+
+    private void CreateShortcutInZone(ZoneModel zone)
+    {
+        var targetDialog = new RenameItemWindow(
+            string.Empty,
+            preservesExtension: false,
+            dialogTitle: "新建快捷方式",
+            actionTitle: "快捷方式地址",
+            hint: "输入程序、文件或文件夹的完整地址",
+            validator: value =>
+            {
+                var path = NormalizeShortcutTarget(value);
+                return File.Exists(path) || Directory.Exists(path);
+            },
+            validationMessage: "请输入一个真实存在的程序、文件或文件夹地址。")
+        {
+            Owner = this
+        };
+        if (targetDialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        var targetPath = NormalizeShortcutTarget(targetDialog.NewName);
+        var defaultName = Directory.Exists(targetPath)
+            ? new DirectoryInfo(targetPath).Name
+            : Path.GetFileNameWithoutExtension(targetPath);
+        var nameDialog = new RenameItemWindow(
+            defaultName,
+            preservesExtension: true,
+            dialogTitle: "新建快捷方式",
+            actionTitle: "快捷方式名称",
+            hint: "输入名称，.lnk 扩展名会自动添加")
+        {
+            Owner = this
+        };
+        if (nameDialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        var fileName = nameDialog.NewName.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase)
+            ? nameDialog.NewName
+            : nameDialog.NewName + ".lnk";
+        var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        var shortcutPath = Path.Combine(desktop, fileName);
+        if (File.Exists(shortcutPath))
+        {
+            System.Windows.MessageBox.Show(
+                this,
+                "桌面上已经存在同名快捷方式，请换一个名称。",
+                "无法新建快捷方式",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        if (!_shellService.CreateShortcut(shortcutPath, targetPath))
+        {
+            ShowStatus("快捷方式创建失败，请检查桌面目录权限");
+            return;
+        }
+
+        zone.Items.Add(DesktopItem.FromPath(shortcutPath, zone.CategoryKey));
+        _iconService.Invalidate();
+        RefreshZone(zone);
+        RequestSave();
+        ShowStatus($"已在“{zone.Name}”中新建快捷方式");
+    }
+
+    private static string NormalizeShortcutTarget(string value)
+    {
+        var unquoted = value.Trim().Trim('"');
+        return Environment.ExpandEnvironmentVariables(unquoted);
+    }
+
+    private static string GetUniquePath(string directory, string baseName, string extension)
+    {
+        var path = Path.Combine(directory, baseName + extension);
+        for (var index = 2; File.Exists(path) || Directory.Exists(path); index++)
+        {
+            path = Path.Combine(directory, $"{baseName} ({index}){extension}");
+        }
+
+        return path;
+    }
+
     private void AddPathsToZone(ZoneModel targetZone, IReadOnlyList<string> paths)
     {
         var added = 0;
@@ -421,21 +944,34 @@ public partial class MainWindow : System.Windows.Window
         ShowStatus(added == 0 ? "没有可添加的文件" : $"已添加 {added} 个映射到“{targetZone.Name}”");
     }
 
-    private void MoveItem(ZoneModel targetZone, ItemDragPayload payload)
+    private void MoveItem(ZoneModel targetZone, ItemDragPayload payload, int targetIndex)
     {
         var sourceZone = _state.Zones.FirstOrDefault(zone => zone.Id == payload.SourceZoneId);
         var item = sourceZone?.Items.FirstOrDefault(value => value.Id == payload.ItemId);
-        if (sourceZone is null || item is null || sourceZone.Id == targetZone.Id)
+        if (sourceZone is null || item is null)
         {
             return;
         }
 
-        sourceZone.Items.Remove(item);
+        if (!ZoneItemOrderService.Move(sourceZone.Items, targetZone.Items, payload.ItemId, targetIndex))
+        {
+            return;
+        }
+
         item.CategoryKey = targetZone.CategoryKey;
-        targetZone.Items.Add(item);
-        RenderZones();
+        if (sourceZone.Id == targetZone.Id)
+        {
+            RefreshZone(targetZone);
+            ShowStatus("分区内顺序已调整");
+        }
+        else
+        {
+            RefreshZone(sourceZone);
+            RefreshZone(targetZone);
+            ShowStatus($"已移动到“{targetZone.Name}”");
+        }
+
         RequestSave();
-        ShowStatus($"已移动到“{targetZone.Name}”");
     }
 
     private void OpenItem(DesktopItem item)
@@ -446,6 +982,81 @@ public partial class MainWindow : System.Windows.Window
         }
     }
 
+    private void RenameItem(ZoneModel zone, DesktopItem item)
+    {
+        var isDirectory = Directory.Exists(item.Path);
+        var isFile = File.Exists(item.Path);
+        if (!isDirectory && !isFile)
+        {
+            ShowStatus("无法重命名：文件可能已被移动或删除");
+            return;
+        }
+
+        var currentName = isDirectory
+            ? new DirectoryInfo(item.Path).Name
+            : Path.GetFileNameWithoutExtension(item.Path);
+        var dialog = new RenameItemWindow(currentName, preservesExtension: isFile) { Owner = this };
+        if (dialog.ShowDialog() != true || string.Equals(dialog.NewName, currentName, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var parent = Path.GetDirectoryName(item.Path);
+        if (string.IsNullOrWhiteSpace(parent))
+        {
+            ShowStatus("无法重命名此项目");
+            return;
+        }
+
+        var extension = isFile ? Path.GetExtension(item.Path) : string.Empty;
+        var destination = Path.Combine(parent, dialog.NewName + extension);
+        try
+        {
+            if (isDirectory)
+            {
+                Directory.Move(item.Path, destination);
+            }
+            else
+            {
+                File.Move(item.Path, destination);
+            }
+        }
+        catch (UnauthorizedAccessException)
+        {
+            var elevate = System.Windows.MessageBox.Show(
+                this,
+                "该项目位于公共桌面或受保护位置，重命名需要管理员权限。\n\n是否授权后继续？",
+                "需要管理员权限",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Information);
+            if (elevate != MessageBoxResult.Yes || !_shellService.RenameWithElevation(item.Path, destination))
+            {
+                ShowStatus("重命名已取消或未获得管理员权限");
+                return;
+            }
+        }
+        catch (IOException)
+        {
+            var destinationExists = File.Exists(destination) || Directory.Exists(destination);
+            System.Windows.MessageBox.Show(
+                this,
+                destinationExists
+                    ? "目标位置已经存在同名文件或文件夹，请换一个名称。"
+                    : "文件当前可能正在使用，暂时无法重命名。",
+                "无法重命名",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        item.Path = Path.GetFullPath(destination);
+        item.DisplayName = dialog.NewName;
+        _iconService.Invalidate();
+        RefreshZone(zone);
+        RequestSave();
+        ShowStatus($"已重命名为“{dialog.NewName}”");
+    }
+
     private void RevealItem(DesktopItem item)
     {
         if (!_shellService.Reveal(item.Path))
@@ -454,8 +1065,46 @@ public partial class MainWindow : System.Windows.Window
         }
     }
 
+    private void ShowItemProperties(DesktopItem item)
+    {
+        if (!_shellService.ShowProperties(item.Path))
+        {
+            ShowStatus("无法打开属性：文件可能已被移动或删除");
+        }
+    }
+
+    private void DeleteItem(ZoneModel zone, DesktopItem item)
+    {
+        if (!item.Exists)
+        {
+            ShowStatus("无法删除：文件可能已被移动或删除");
+            return;
+        }
+
+        if (!_shellService.MoveToRecycleBin(item.Path))
+        {
+            ShowStatus("删除失败，文件可能正在使用或权限不足");
+            return;
+        }
+
+        ClearItemSelection();
+        zone.Items.Remove(item);
+        RefreshZone(zone);
+        RequestSave();
+        ShowStatus("文件已移入回收站");
+    }
+
+    private void RefreshZone(ZoneModel zone)
+    {
+        DesktopCanvas.Children
+            .OfType<ZoneCard>()
+            .FirstOrDefault(card => card.Model.Id == zone.Id)
+            ?.RefreshItems();
+    }
+
     private void RemoveItem(ZoneModel zone, DesktopItem item)
     {
+        ClearItemSelection();
         zone.Items.Remove(item);
         RenderZones();
         RequestSave();
@@ -670,35 +1319,29 @@ public partial class MainWindow : System.Windows.Window
     {
         var width = ToolbarBorder.ActualWidth;
         var centerY = top + ToolbarBorder.ActualHeight / 2;
-        var arrow = new System.Windows.Shapes.Path
-        {
-            Width = 12,
-            Height = 14,
-            Stretch = Stretch.Fill,
-            Data = Geometry.Parse(movingRight ? "M 0,0 L 12,7 L 0,14 Z" : "M 12,0 L 0,7 L 12,14 Z"),
-            Fill = (Brush)FindResource("AccentBrush"),
-            Effect = new DropShadowEffect
-            {
-                BlurRadius = 7,
-                ShadowDepth = 0,
-                Opacity = 0.8,
-                Color = Color.FromRgb(118, 215, 196)
-            }
-        };
-        var arrowStart = movingRight ? oldLeft + width + 5 : oldLeft - 17;
-        var arrowTarget = movingRight ? targetLeft + width + 5 : targetLeft - 17;
-        Canvas.SetLeft(arrow, arrowStart);
-        Canvas.SetTop(arrow, centerY - 7);
-        ToolbarRocketCanvas.Children.Add(arrow);
-        arrow.BeginAnimation(Canvas.LeftProperty, new DoubleAnimation(arrowStart, arrowTarget, duration)
+        var rocket = CreateToolbarRocket(movingRight);
+        // Keep the rocket inside the screen at both end alignments instead of clipping its nose
+        // beyond the desktop edge. It rides on the leading edge as if it is pulling the toolbar.
+        var rocketStart = movingRight ? oldLeft + width - rocket.Width : oldLeft;
+        var rocketTarget = movingRight ? targetLeft + width - rocket.Width : targetLeft;
+        Canvas.SetLeft(rocket, rocketStart);
+        Canvas.SetTop(rocket, centerY - rocket.Height / 2);
+        ToolbarRocketCanvas.Children.Add(rocket);
+        rocket.BeginAnimation(Canvas.LeftProperty, new DoubleAnimation(rocketStart, rocketTarget, duration)
         {
             EasingFunction = easing,
             FillBehavior = FillBehavior.Stop
         });
-        arrow.BeginAnimation(OpacityProperty, new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(150))
+        rocket.BeginAnimation(OpacityProperty, new DoubleAnimationUsingKeyFrames
         {
-            BeginTime = TimeSpan.FromMilliseconds(750),
-            FillBehavior = FillBehavior.Stop
+            Duration = duration,
+            FillBehavior = FillBehavior.Stop,
+            KeyFrames =
+            {
+                new LinearDoubleKeyFrame(0.96, KeyTime.FromPercent(0)),
+                new LinearDoubleKeyFrame(1, KeyTime.FromPercent(0.72)),
+                new LinearDoubleKeyFrame(0, KeyTime.FromPercent(1))
+            }
         });
 
         var verticalOffsets = new[]
@@ -765,6 +1408,138 @@ public partial class MainWindow : System.Windows.Window
                 }
             });
         }
+    }
+
+    private Canvas CreateToolbarRocket(bool movingRight)
+    {
+        const double rocketWidth = 43;
+        const double rocketHeight = 27;
+        var rocket = new Canvas
+        {
+            Width = rocketWidth,
+            Height = rocketHeight,
+            RenderTransformOrigin = new Point(0.5, 0.5),
+            Effect = new DropShadowEffect
+            {
+                BlurRadius = 10,
+                ShadowDepth = 0,
+                Opacity = 0.75,
+                Color = Color.FromRgb(77, 230, 200)
+            }
+        };
+
+        var transformGroup = new TransformGroup();
+        transformGroup.Children.Add(new ScaleTransform(movingRight ? 1 : -1, 1));
+        var tilt = new RotateTransform(0, rocketWidth / 2, rocketHeight / 2);
+        transformGroup.Children.Add(tilt);
+        rocket.RenderTransform = transformGroup;
+        tilt.BeginAnimation(RotateTransform.AngleProperty, new DoubleAnimationUsingKeyFrames
+        {
+            Duration = TimeSpan.FromMilliseconds(500),
+            AutoReverse = true,
+            RepeatBehavior = RepeatBehavior.Forever,
+            KeyFrames =
+            {
+                new SplineDoubleKeyFrame(-1.4, KeyTime.FromPercent(0)),
+                new SplineDoubleKeyFrame(1.4, KeyTime.FromPercent(1))
+            }
+        });
+
+        var outerFlame = new System.Windows.Shapes.Path
+        {
+            Data = Geometry.Parse("M 11,8 C 7,7 2,8 0,13.5 C 2,19 7,20 11,18 Z"),
+            Fill = new LinearGradientBrush(
+                Color.FromRgb(255, 91, 51),
+                Color.FromRgb(255, 210, 77),
+                new Point(0, 0.5),
+                new Point(1, 0.5)),
+            Effect = new DropShadowEffect
+            {
+                BlurRadius = 8,
+                ShadowDepth = 0,
+                Opacity = 0.9,
+                Color = Color.FromRgb(255, 129, 56)
+            },
+            RenderTransformOrigin = new Point(1, 0.5)
+        };
+        var flameScale = new ScaleTransform(1, 1);
+        outerFlame.RenderTransform = flameScale;
+        flameScale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(0.72, 1.12, TimeSpan.FromMilliseconds(85))
+        {
+            AutoReverse = true,
+            RepeatBehavior = RepeatBehavior.Forever,
+            EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }
+        });
+        rocket.Children.Add(outerFlame);
+
+        var innerFlame = new System.Windows.Shapes.Path
+        {
+            Data = Geometry.Parse("M 11,10.5 C 8,10 5,11.5 3.5,13.5 C 5.5,16 8,17 11,16.5 Z"),
+            Fill = new SolidColorBrush(Color.FromRgb(255, 248, 181)),
+            Opacity = 0.95
+        };
+        rocket.Children.Add(innerFlame);
+
+        var topFin = new System.Windows.Shapes.Path
+        {
+            Data = Geometry.Parse("M 15,7 L 10,1.5 C 16,1 20,3 23,5.5 Z"),
+            Fill = new SolidColorBrush(Color.FromRgb(45, 184, 164))
+        };
+        rocket.Children.Add(topFin);
+        var bottomFin = new System.Windows.Shapes.Path
+        {
+            Data = Geometry.Parse("M 15,20 L 10,25.5 C 16,26 20,24 23,21.5 Z"),
+            Fill = new SolidColorBrush(Color.FromRgb(45, 184, 164))
+        };
+        rocket.Children.Add(bottomFin);
+
+        var body = new System.Windows.Shapes.Path
+        {
+            Data = Geometry.Parse("M 9,8 C 16,4 29,3.5 40,13.5 C 29,23.5 16,23 9,19 L 12.5,13.5 Z"),
+            Fill = new LinearGradientBrush
+            {
+                StartPoint = new Point(0, 0),
+                EndPoint = new Point(0, 1),
+                GradientStops =
+                {
+                    new GradientStop(Color.FromRgb(238, 255, 251), 0),
+                    new GradientStop(Color.FromRgb(139, 235, 215), 0.55),
+                    new GradientStop(Color.FromRgb(65, 188, 169), 1)
+                }
+            },
+            Stroke = new SolidColorBrush(Color.FromRgb(23, 123, 111)),
+            StrokeThickness = 0.8
+        };
+        rocket.Children.Add(body);
+
+        var seam = new System.Windows.Shapes.Path
+        {
+            Data = Geometry.Parse("M 13,7 C 16,11 16,16 13,20"),
+            Stroke = new SolidColorBrush(Color.FromArgb(150, 25, 133, 119)),
+            StrokeThickness = 1
+        };
+        rocket.Children.Add(seam);
+
+        var window = new System.Windows.Shapes.Ellipse
+        {
+            Width = 7.5,
+            Height = 7.5,
+            Fill = new RadialGradientBrush
+            {
+                GradientStops =
+                {
+                    new GradientStop(Color.FromRgb(220, 255, 250), 0),
+                    new GradientStop(Color.FromRgb(47, 137, 175), 0.58),
+                    new GradientStop(Color.FromRgb(14, 55, 83), 1)
+                }
+            },
+            Stroke = new SolidColorBrush(Color.FromRgb(226, 255, 250)),
+            StrokeThickness = 1
+        };
+        Canvas.SetLeft(window, 24);
+        Canvas.SetTop(window, 9.75);
+        rocket.Children.Add(window);
+        return rocket;
     }
 
     private void StopToolbarFlight()
@@ -930,6 +1705,7 @@ public partial class MainWindow : System.Windows.Window
             // Exit must remain safe even when local storage is unavailable.
         }
 
+        ClearItemSelection();
         _iconVisibility.RestoreInitialState();
         _desktopWatcher?.Dispose();
         _trayService?.Dispose();

@@ -125,16 +125,21 @@
                             </Grid>
                         </Border>
                         <Popup x:Name="PART_Popup" Placement="Right" PlacementTarget="{Binding ElementName=MenuItemRoot}"
+                               HorizontalOffset="-9" VerticalOffset="-12"
                                IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}"
                                AllowsTransparency="True" Focusable="False" PopupAnimation="Fade">
-                            <Border Background="{DynamicResource MenuSurfaceBrush}"
-                                    BorderBrush="{DynamicResource MenuStrokeBrush}" BorderThickness="1"
-                                    CornerRadius="10" Padding="5" Margin="3,-5,0,0">
-                                <Border.Effect>
-                                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.32" Color="#05080D" />
-                                </Border.Effect>
-                                <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle" />
-                            </Border>
+                            <!-- Reserve transparent space around the submenu so its rounded border and
+                                 shadow are not clipped by the native popup window bounds. -->
+                            <Grid Background="Transparent">
+                                <Border Background="{DynamicResource MenuSurfaceBrush}"
+                                        BorderBrush="{DynamicResource MenuStrokeBrush}" BorderThickness="1"
+                                        CornerRadius="10" Padding="5" Margin="12">
+                                    <Border.Effect>
+                                        <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.32" Color="#05080D" />
+                                    </Border.Effect>
+                                    <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle" />
+                                </Border>
+                            </Grid>
                         </Popup>
                     </Grid>
                     <ControlTemplate.Triggers>

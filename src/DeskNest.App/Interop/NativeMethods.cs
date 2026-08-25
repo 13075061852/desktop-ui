@@ -9,7 +9,9 @@ internal static class NativeMethods
     internal const uint SpiSetDesktopWallpaper = 0x0014;
     internal const uint SpifUpdateIniFile = 0x0001;
     internal const uint SpifSendChange = 0x0002;
+    internal const int WmActivateApp = 0x001C;
     internal const int WmNcHitTest = 0x0084;
+    internal const int WmHotKey = 0x0312;
     internal const int HtTransparent = -1;
     internal const int HtClient = 1;
     internal const uint SmtoNormal = 0;
@@ -17,8 +19,11 @@ internal static class NativeMethods
     internal const int GwlExStyle = -20;
     internal const long WsChild = 0x40000000L;
     internal const long WsPopup = unchecked((long)0x80000000L);
+    internal const long WsExTransparent = 0x00000020L;
     internal const long WsExToolWindow = 0x00000080L;
     internal const long WsExNoActivate = 0x08000000L;
+    internal const uint SwpNoSize = 0x0001;
+    internal const uint SwpNoMove = 0x0002;
     internal const uint SwpNoActivate = 0x0010;
     internal const uint SwpShowWindow = 0x0040;
     internal const int SwHide = 0;
@@ -29,6 +34,9 @@ internal static class NativeMethods
     internal const uint ShgfiLargeIcon = 0x000000000;
     internal const uint ShgfiSmallIcon = 0x000000001;
     internal const uint ShgfiSysIconIndex = 0x000004000;
+    internal const uint ShgsiIcon = 0x000000100;
+    internal const uint ShgsiLargeIcon = 0x000000000;
+    internal const uint SiidRecycler = 31;
     internal const int ShilLarge = 0;
     internal const int ShilExtraLarge = 2;
     internal const int IldTransparent = 0x00000001;
@@ -45,6 +53,13 @@ internal static class NativeMethods
     internal const uint WmApp = 0x8000;
     internal const int WmLeftButtonDoubleClick = 0x0203;
     internal const int WmRightButtonUp = 0x0205;
+    internal const int VkLeftButton = 0x01;
+    internal const int VkRightButton = 0x02;
+    internal const int VkMiddleButton = 0x04;
+    internal const int VkDelete = 0x2E;
+    internal const uint ImageIcon = 1;
+    internal const uint LrDefaultSize = 0x0040;
+    internal const uint LrLoadFromFile = 0x0010;
 
     internal delegate bool EnumWindowsProc(nint window, nint parameter);
 
@@ -126,6 +141,30 @@ internal static class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool IsWindowVisible(nint window);
 
+    [DllImport("user32.dll")]
+    internal static extern short GetAsyncKeyState(int virtualKey);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool RegisterHotKey(nint window, int id, uint modifiers, uint virtualKey);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool UnregisterHotKey(nint window, int id);
+
+    [DllImport("user32.dll")]
+    internal static extern nint GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool GetCursorPos(out NativePoint point);
+
+    [DllImport("user32.dll")]
+    internal static extern nint WindowFromPoint(NativePoint point);
+
+    [DllImport("user32.dll")]
+    internal static extern uint GetWindowThreadProcessId(nint window, out uint processId);
+
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     internal static extern nint SHGetFileInfo(
         string path,
@@ -133,6 +172,12 @@ internal static class NativeMethods
         out ShellFileInfo fileInfo,
         uint fileInfoSize,
         uint flags);
+
+    [DllImport("shell32.dll", EntryPoint = "SHGetStockIconInfo", CharSet = CharSet.Unicode)]
+    internal static extern int SHGetStockIconInfo(
+        uint stockIconId,
+        uint flags,
+        ref StockIconInfo stockIconInfo);
 
     [DllImport("shell32.dll", EntryPoint = "SHGetImageList")]
     internal static extern int SHGetImageList(
@@ -146,6 +191,15 @@ internal static class NativeMethods
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     internal static extern nint LoadIcon(nint instance, nint iconName);
+
+    [DllImport("user32.dll", EntryPoint = "LoadImageW", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern nint LoadImage(
+        nint instance,
+        string name,
+        uint type,
+        int desiredWidth,
+        int desiredHeight,
+        uint loadFlags);
 
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -208,6 +262,25 @@ internal static class NativeMethods
 
         [PreserveSig]
         int GetIcon(int index, int flags, out nint icon);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct NativePoint
+    {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    internal struct StockIconInfo
+    {
+        public uint Size;
+        public nint IconHandle;
+        public int SystemImageIndex;
+        public int IconIndex;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string Path;
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]

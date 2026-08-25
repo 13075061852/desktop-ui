@@ -4,6 +4,8 @@ namespace DeskNest.Core.Models;
 
 public sealed class DesktopItem
 {
+    public const string RecycleBinShellPath = "shell:RecycleBinFolder";
+
     public Guid Id { get; set; } = Guid.NewGuid();
 
     public string Path { get; set; } = string.Empty;
@@ -13,7 +15,23 @@ public sealed class DesktopItem
     public string CategoryKey { get; set; } = "other";
 
     [JsonIgnore]
-    public bool Exists => File.Exists(Path) || Directory.Exists(Path);
+    public bool Exists => IsShellLocation(Path) || File.Exists(Path) || Directory.Exists(Path);
+
+    public static bool IsShellLocation(string path) =>
+        path.StartsWith("shell:", StringComparison.OrdinalIgnoreCase);
+
+    public static DesktopItem FromShellLocation(
+        string shellPath,
+        string displayName,
+        string categoryKey = "other")
+    {
+        return new DesktopItem
+        {
+            Path = shellPath,
+            DisplayName = displayName,
+            CategoryKey = categoryKey
+        };
+    }
 
     public static DesktopItem FromPath(string path, string categoryKey)
     {

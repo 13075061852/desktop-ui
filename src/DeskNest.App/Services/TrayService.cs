@@ -1,8 +1,10 @@
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Interop;
+using System.Windows.Threading;
 using DeskNest.App.Interop;
 
 namespace DeskNest.App.Services;
@@ -17,8 +19,14 @@ internal sealed class TrayService : IDisposable
     private readonly Action _toggleDesktopMode;
     private readonly Action _exit;
     private readonly HwndSource _messageWindow;
+    private readonly DispatcherTimer _menuDismissTimer;
+    private readonly nint _trayIconHandle;
+    private readonly bool _ownsTrayIconHandle;
     private NativeMethods.NotifyIconData _iconData;
+    private ContextMenu? _contextMenu;
+    private nint _contextMenuHandle;
     private bool _disposed;
+    private bool _menuPointerArmed;
 
     public TrayService(Action show, Action organize, Action toggleDesktopMode, Action exit)
     {
@@ -36,6 +44,24 @@ internal sealed class TrayService : IDisposable
         };
         _messageWindow = new HwndSource(parameters);
         _messageWindow.AddHook(WindowProcedure);
+        _menuDismissTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(45) };
+        _menuDismissTimer.Tick += (_, _) => DismissMenuOnOutsidePointerDown();
+
+        var iconPath = Path.Combine(AppContext.BaseDirectory, "DeskNest.ico");
+        _trayIconHandle = File.Exists(iconPath)
+            ? NativeMethods.LoadImage(
+                0,
+                iconPath,
+                NativeMethods.ImageIcon,
+                0,
+                0,
+                NativeMethods.LrLoadFromFile | NativeMethods.LrDefaultSize)
+            : 0;
+        _ownsTrayIconHandle = _trayIconHandle != 0;
+        if (_trayIconHandle == 0)
+        {
+            _trayIconHandle = NativeMethods.LoadIcon(0, new nint(32512));
+        }
 
         _iconData = new NativeMethods.NotifyIconData
         {
@@ -44,7 +70,7 @@ internal sealed class TrayService : IDisposable
             Id = TrayIconId,
             Flags = NativeMethods.NifMessage | NativeMethods.NifIcon | NativeMethods.NifTip,
             CallbackMessage = CallbackMessage,
-            Icon = NativeMethods.LoadIcon(0, new nint(32512)),
+            Icon = _trayIconHandle,
             Tip = "栖格 · DeskNest",
             Info = string.Empty,
             InfoTitle = string.Empty
@@ -94,6 +120,11 @@ internal sealed class TrayService : IDisposable
 
     private void ShowContextMenu()
     {
+        if (_contextMenu is not null)
+        {
+            _contextMenu.IsOpen = false;
+        }
+
         var menu = new ContextMenu
         {
             Placement = PlacementMode.MousePoint,
@@ -104,8 +135,61 @@ internal sealed class TrayService : IDisposable
         menu.Items.Add(CreateMenuItem("切换桌面模式", _toggleDesktopMode));
         menu.Items.Add(new Separator());
         menu.Items.Add(CreateMenuItem("退出", _exit));
+        menu.Opened += (_, _) => menu.Dispatcher.BeginInvoke(() =>
+        {
+            _contextMenuHandle = (PresentationSource.FromVisual(menu) as HwndSource)?.Handle ?? 0;
+        });
+        menu.Closed += (_, _) =>
+        {
+            if (_contextMenu == menu)
+            {
+                _contextMenu = null;
+                _contextMenuHandle = 0;
+                _menuPointerArmed = false;
+                _menuDismissTimer.Stop();
+            }
+        };
+        _contextMenu = menu;
+        _menuPointerArmed = false;
+        _menuDismissTimer.Start();
         menu.IsOpen = true;
     }
+
+    private void DismissMenuOnOutsidePointerDown()
+    {
+        if (_contextMenu?.IsOpen != true)
+        {
+            _menuDismissTimer.Stop();
+            return;
+        }
+
+        var pointerDown = IsPointerButtonDown();
+        if (!pointerDown)
+        {
+            _menuPointerArmed = true;
+            return;
+        }
+
+        if (!_menuPointerArmed)
+        {
+            return;
+        }
+
+        _menuPointerArmed = false;
+        if (!NativeMethods.GetCursorPos(out var point) ||
+            NativeMethods.WindowFromPoint(point) != _contextMenuHandle)
+        {
+            _contextMenu.IsOpen = false;
+        }
+    }
+
+    private static bool IsPointerButtonDown() =>
+        IsKeyDown(NativeMethods.VkLeftButton) ||
+        IsKeyDown(NativeMethods.VkRightButton) ||
+        IsKeyDown(NativeMethods.VkMiddleButton);
+
+    private static bool IsKeyDown(int virtualKey) =>
+        (NativeMethods.GetAsyncKeyState(virtualKey) & 0x8000) != 0;
 
     private static MenuItem CreateMenuItem(string header, Action action)
     {
@@ -122,7 +206,17 @@ internal sealed class TrayService : IDisposable
         }
 
         _disposed = true;
+        _menuDismissTimer.Stop();
+        if (_contextMenu is not null)
+        {
+            _contextMenu.IsOpen = false;
+            _contextMenu = null;
+        }
         NativeMethods.Shell_NotifyIcon(NativeMethods.NimDelete, ref _iconData);
+        if (_ownsTrayIconHandle)
+        {
+            NativeMethods.DestroyIcon(_trayIconHandle);
+        }
         _messageWindow.RemoveHook(WindowProcedure);
         _messageWindow.Dispose();
     }

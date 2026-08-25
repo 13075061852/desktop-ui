@@ -2,6 +2,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\DeskNest.Core\DeskNest.Core.csproj" />
+    <Content Include="..\..\assets\DeskNest.ico">
+      <Link>DeskNest.ico</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
     <Content Include="..\..\assets\wallpapers\*.jpg">
       <Link>Wallpapers\%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

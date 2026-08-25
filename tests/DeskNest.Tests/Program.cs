@@ -32,6 +32,37 @@ var tests = new List<(string Name, Action Run)>
             Directory.Delete(root, recursive: true);
         }
     }),
+    ("shell desktop items remain valid without a file-system path", () =>
+    {
+        var recycleBin = DesktopItem.FromShellLocation(
+            DesktopItem.RecycleBinShellPath,
+            "回收站");
+
+        Assert.Equal(true, recycleBin.Exists);
+        Assert.Equal("回收站", recycleBin.DisplayName);
+    }),
+    ("item ordering repositions an item inside the same zone", () =>
+    {
+        var first = new DesktopItem { DisplayName = "A" };
+        var second = new DesktopItem { DisplayName = "B" };
+        var third = new DesktopItem { DisplayName = "C" };
+        var items = new List<DesktopItem> { first, second, third };
+
+        Assert.Equal(true, ZoneItemOrderService.Move(items, items, first.Id, 3));
+        Assert.SequenceEqual(new[] { second.Id, third.Id, first.Id }, items.Select(item => item.Id));
+    }),
+    ("item ordering inserts an item at a target-zone position", () =>
+    {
+        var moved = new DesktopItem { DisplayName = "Moved" };
+        var before = new DesktopItem { DisplayName = "Before" };
+        var after = new DesktopItem { DisplayName = "After" };
+        var source = new List<DesktopItem> { moved };
+        var target = new List<DesktopItem> { before, after };
+
+        Assert.Equal(true, ZoneItemOrderService.Move(source, target, moved.Id, 1));
+        Assert.Equal(0, source.Count);
+        Assert.SequenceEqual(new[] { before.Id, moved.Id, after.Id }, target.Select(item => item.Id));
+    }),
     ("zone collision keeps a twelve pixel gap while moving", () =>
     {
         var current = new ZoneBounds(0, 72, 200, 200);
@@ -126,6 +157,121 @@ var tests = new List<(string Name, Action Run)>
         Assert.Near(12, left.X, 0.1);
         Assert.Near(988, right.X, 0.1);
     }),
+    ("stack resize compresses an adjacent lower zone while preserving its bottom", () =>
+    {
+        var current = new ZoneBounds(10, 72, 250, 300);
+        var lower = new ZoneBounds(10, 384, 250, 400);
+        var result = ZoneStackResizeResolver.CompressAdjacentBelow(
+            current,
+            current with { Height = 380 },
+            new[] { lower },
+            gap: 12,
+            minimumHeight: 150);
+
+        Assert.Near(452, result.Desired.Bottom, 0.1);
+        Assert.Near(464, result.Obstacles[0].Y, 0.1);
+        Assert.Near(320, result.Obstacles[0].Height, 0.1);
+        Assert.Near(784, result.Obstacles[0].Bottom, 0.1);
+    }),
+    ("stack resize stops when the lower zone reaches minimum height", () =>
+    {
+        var current = new ZoneBounds(10, 72, 250, 300);
+        var lower = new ZoneBounds(10, 384, 250, 200);
+        var result = ZoneStackResizeResolver.CompressAdjacentBelow(
+            current,
+            current with { Height = 500 },
+            new[] { lower },
+            gap: 12,
+            minimumHeight: 150);
+
+        Assert.Near(422, result.Desired.Bottom, 0.1);
+        Assert.Near(434, result.Obstacles[0].Y, 0.1);
+        Assert.Near(150, result.Obstacles[0].Height, 0.1);
+    }),
+    ("stack resize ignores zones that are not directly below", () =>
+    {
+        var current = new ZoneBounds(10, 72, 250, 300);
+        var lower = new ZoneBounds(400, 384, 250, 300);
+        var desired = current with { Height = 420 };
+        var result = ZoneStackResizeResolver.CompressAdjacentBelow(
+            current, desired, new[] { lower }, 12, 150);
+
+        Assert.Equal(desired, result.Desired);
+        Assert.Equal(lower, result.Obstacles[0]);
+    }),
+    ("adjacent resize compresses a zone on the right", () =>
+    {
+        var current = new ZoneBounds(10, 72, 250, 300);
+        var right = new ZoneBounds(272, 72, 400, 300);
+        var result = ZoneStackResizeResolver.CompressAdjacent(
+            current, current with { Width = 350 }, new[] { right }, 12, 200, 150);
+
+        Assert.Near(360, result.Desired.Right, 0.1);
+        Assert.Near(372, result.Obstacles[0].X, 0.1);
+        Assert.Near(300, result.Obstacles[0].Width, 0.1);
+        Assert.Near(672, result.Obstacles[0].Right, 0.1);
+    }),
+    ("adjacent resize compresses a zone on the left", () =>
+    {
+        var current = new ZoneBounds(400, 72, 250, 300);
+        var left = new ZoneBounds(50, 72, 338, 300);
+        var result = ZoneStackResizeResolver.CompressAdjacent(
+            current, new ZoneBounds(300, 72, 350, 300), new[] { left }, 12, 200, 150);
+
+        Assert.Near(300, result.Desired.X, 0.1);
+        Assert.Near(238, result.Obstacles[0].Width, 0.1);
+        Assert.Near(288, result.Obstacles[0].Right, 0.1);
+    }),
+    ("adjacent resize compresses a zone above", () =>
+    {
+        var current = new ZoneBounds(10, 400, 250, 250);
+        var above = new ZoneBounds(10, 72, 250, 316);
+        var result = ZoneStackResizeResolver.CompressAdjacent(
+            current, new ZoneBounds(10, 300, 250, 350), new[] { above }, 12, 200, 150);
+
+        Assert.Near(300, result.Desired.Y, 0.1);
+        Assert.Near(216, result.Obstacles[0].Height, 0.1);
+        Assert.Near(288, result.Obstacles[0].Bottom, 0.1);
+    }),
+    ("adjacent reflow moves a right zone before changing its width", () =>
+    {
+        var current = new ZoneBounds(10, 72, 250, 300);
+        var right = new ZoneBounds(272, 72, 300, 300);
+        var result = ZoneStackResizeResolver.ReflowAdjacent(
+            current, current with { Width = 350 }, new[] { right }, 12, 200, 150,
+            0, 72, 900, 900);
+
+        Assert.Near(372, result.Obstacles[0].X, 0.1);
+        Assert.Near(300, result.Obstacles[0].Width, 0.1);
+        Assert.Near(360, result.Desired.Right, 0.1);
+    }),
+    ("adjacent reflow uses free space first and then compresses", () =>
+    {
+        var current = new ZoneBounds(10, 72, 250, 300);
+        var right = new ZoneBounds(272, 72, 300, 300);
+        var result = ZoneStackResizeResolver.ReflowAdjacent(
+            current, current with { Width = 350 }, new[] { right }, 12, 200, 150,
+            0, 72, 622, 900);
+
+        Assert.Near(372, result.Obstacles[0].X, 0.1);
+        Assert.Near(250, result.Obstacles[0].Width, 0.1);
+        Assert.Near(622, result.Obstacles[0].Right, 0.1);
+        Assert.Near(360, result.Desired.Right, 0.1);
+    }),
+    ("adjacent reflow moves a connected row as one group", () =>
+    {
+        var current = new ZoneBounds(10, 72, 250, 300);
+        var first = new ZoneBounds(272, 72, 220, 300);
+        var second = new ZoneBounds(504, 72, 220, 300);
+        var result = ZoneStackResizeResolver.ReflowAdjacent(
+            current, current with { Width = 310 }, new[] { first, second }, 12, 200, 150,
+            0, 72, 900, 900);
+
+        Assert.Near(332, result.Obstacles[0].X, 0.1);
+        Assert.Near(564, result.Obstacles[1].X, 0.1);
+        Assert.Near(220, result.Obstacles[0].Width, 0.1);
+        Assert.Near(220, result.Obstacles[1].Width, 0.1);
+    }),
     ("zone alignment snaps moving edges within ten pixels", () =>
     {
         var current = new ZoneBounds(20, 400, 200, 200);
@@ -199,6 +345,8 @@ var tests = new List<(string Name, Action Run)>
             expected.WallpaperSelection = "mist-mountains";
             expected.ToolbarAlignment = "Right";
             expected.Zones[0].Name = "高频工具";
+            expected.Zones[0].ViewMode = "List";
+            expected.Zones[0].Width = 120;
 
             store.SaveAsync(expected).GetAwaiter().GetResult();
             var actual = store.LoadAsync().GetAwaiter().GetResult();
@@ -207,6 +355,8 @@ var tests = new List<(string Name, Action Run)>
             Assert.Equal("mist-mountains", actual.WallpaperSelection);
             Assert.Equal("Right", actual.ToolbarAlignment);
             Assert.Equal("高频工具", actual.Zones[0].Name);
+            Assert.Equal("List", actual.Zones[0].ViewMode);
+            Assert.Near(150, actual.Zones[0].Width, 0.1);
         });
     }),
     ("state store recovers malformed primary from backup", () =>
