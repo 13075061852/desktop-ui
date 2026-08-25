@@ -11,6 +11,24 @@
         Width="1600" Height="900"
         Left="0" Top="0">
     <Grid Background="{x:Null}">
+        <Image x:Name="WallpaperOutgoingImage"
+               Stretch="UniformToFill"
+               HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+               IsHitTestVisible="False" Opacity="0" Visibility="Collapsed"
+               RenderOptions.BitmapScalingMode="LowQuality">
+            <Image.CacheMode>
+                <BitmapCache EnableClearType="False" RenderAtScale="1" />
+            </Image.CacheMode>
+        </Image>
+        <Image x:Name="WallpaperTransitionImage"
+               Stretch="UniformToFill"
+               HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+               IsHitTestVisible="False" Opacity="0" Visibility="Collapsed"
+               RenderOptions.BitmapScalingMode="LowQuality">
+            <Image.CacheMode>
+                <BitmapCache EnableClearType="False" RenderAtScale="1" />
+            </Image.CacheMode>
+        </Image>
         <Canvas x:Name="DesktopCanvas" Background="{x:Null}" />
         <Canvas x:Name="AlignmentGuideCanvas" IsHitTestVisible="False">
             <Line x:Name="VerticalAlignmentGuide" Visibility="Collapsed"
@@ -42,7 +60,7 @@
                 <TranslateTransform x:Name="ToolbarTranslation" />
             </Border.RenderTransform>
             <StackPanel x:Name="ToolbarPanel" Orientation="Horizontal" VerticalAlignment="Center">
-                <Border Width="32" Height="32" Margin="0,0,12,0" CornerRadius="10"
+                <Border x:Name="ToolbarLogo" Width="32" Height="32" Margin="0,0,12,0" CornerRadius="10"
                         Background="{StaticResource AccentBrush}" ToolTip="栖格 · DeskNest">
                     <Viewbox Width="19" Height="19" HorizontalAlignment="Center" VerticalAlignment="Center">
                         <Canvas Width="24" Height="24">

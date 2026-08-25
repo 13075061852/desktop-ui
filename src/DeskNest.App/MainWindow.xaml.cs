@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.IO;
 using System.Windows;
@@ -7,6 +8,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using DeskNest.App.Controls;
 using DeskNest.App.Interop;
@@ -25,10 +27,15 @@ public partial class MainWindow : System.Windows.Window
     private readonly RuleClassifier _classifier = new();
     private readonly ShellIconService _iconService = new();
     private int _toolbarFlightVersion;
+    private int _wallpaperTransitionVersion;
+    private string? _pendingWallpaperTransitionPath;
+    private string _committedWallpaperPath = string.Empty;
     private readonly ShellService _shellService = new();
     private readonly DesktopHostService _desktopHost = new();
     private readonly DesktopIconVisibilityService _iconVisibility = new();
     private readonly DesktopWallpaperService _wallpaperService = new();
+    private readonly ConcurrentDictionary<string, BitmapImage> _wallpaperBitmapCache =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly DispatcherTimer _saveTimer;
     private readonly DispatcherTimer _statusTimer;
     private readonly DispatcherTimer _menuDismissTimer;
@@ -371,6 +378,7 @@ public partial class MainWindow : System.Windows.Window
         {
             _wallpaperService.ApplySelection(_state.WallpaperSelection);
         }
+        _committedWallpaperPath = _wallpaperService.GetCurrentWallpaperPath();
 
         var layoutAdjusted = NormalizeZoneLayout();
 
@@ -417,6 +425,7 @@ public partial class MainWindow : System.Windows.Window
             () => Dispatcher.Invoke(ToggleDesktopMode),
             () => Dispatcher.Invoke(ExitApplication));
         _ = TrimWorkingSetAfterStartupAsync();
+        _ = PreloadWallpaperBitmapsAsync();
 
         if (isFirstRun)
         {
@@ -1201,7 +1210,7 @@ public partial class MainWindow : System.Windows.Window
 
     private void OnSettingsClick(object sender, RoutedEventArgs e)
     {
-        var settings = new SettingsWindow(_state, PreviewAppearance) { Owner = this };
+        var settings = new SettingsWindow(_state, PreviewAppearance, ApplyWallpaperWithTransition) { Owner = this };
         if (settings.ShowDialog() != true)
         {
             return;
@@ -1272,6 +1281,8 @@ public partial class MainWindow : System.Windows.Window
         var flightVersion = _toolbarFlightVersion;
         ToolbarTranslation.BeginAnimation(TranslateTransform.XProperty, null);
         ToolbarTranslation.X = 0;
+        ToolbarLogo.BeginAnimation(OpacityProperty, null);
+        ToolbarLogo.Opacity = 1;
         ToolbarRocketCanvas.Children.Clear();
         SetToolbarAlignment();
         UpdateLayout();
@@ -1286,9 +1297,16 @@ public partial class MainWindow : System.Windows.Window
 
         var duration = TimeSpan.FromMilliseconds(900);
         var easing = new CubicEase { EasingMode = EasingMode.EaseIn };
+        var movingRight = distance < 0;
         ToolbarBorder.IsHitTestVisible = false;
         ToolbarTranslation.X = distance;
-        CreateToolbarRocketEffects(oldLeft, targetLeft, oldTop, distance < 0, duration, easing);
+        // The left-flying rocket occupies the logo slot. Keep its layout space but hide the
+        // stationary logo so the two symbols never overlap during the flight.
+        if (!movingRight)
+        {
+            ToolbarLogo.Opacity = 0;
+        }
+        CreateToolbarRocketEffects(oldLeft, targetLeft, oldTop, movingRight, duration, easing);
 
         var movement = new DoubleAnimation(distance, 0, duration)
         {
@@ -1304,6 +1322,7 @@ public partial class MainWindow : System.Windows.Window
 
             ToolbarTranslation.X = 0;
             ToolbarRocketCanvas.Children.Clear();
+            RestoreToolbarLogo();
             ToolbarBorder.IsHitTestVisible = true;
         };
         ToolbarTranslation.BeginAnimation(TranslateTransform.XProperty, movement);
@@ -1542,13 +1561,187 @@ public partial class MainWindow : System.Windows.Window
         return rocket;
     }
 
+    private void RestoreToolbarLogo()
+    {
+        ToolbarLogo.BeginAnimation(OpacityProperty, null);
+        ToolbarLogo.Opacity = 1;
+        ToolbarLogo.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(160))
+        {
+            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut },
+            FillBehavior = FillBehavior.Stop
+        });
+    }
+
     private void StopToolbarFlight()
     {
         _toolbarFlightVersion++;
         ToolbarTranslation.BeginAnimation(TranslateTransform.XProperty, null);
         ToolbarTranslation.X = 0;
         ToolbarRocketCanvas.Children.Clear();
+        ToolbarLogo.BeginAnimation(OpacityProperty, null);
+        ToolbarLogo.Opacity = 1;
         ToolbarBorder.IsHitTestVisible = true;
+    }
+
+    private bool ApplyWallpaperWithTransition(string? selection)
+    {
+        var targetPath = _wallpaperService.ResolveSelection(selection);
+        if (targetPath is null)
+        {
+            return false;
+        }
+
+        BitmapImage targetWallpaper;
+        try
+        {
+            targetWallpaper = _wallpaperBitmapCache.GetOrAdd(targetPath, LoadWallpaperBitmap);
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return false;
+        }
+
+        // Preserve the strongest currently visible transition layer as the outgoing frame. The
+        // incoming image then cross-fades over it, so a rapid click never flashes back to the
+        // committed Windows wallpaper and never waits for an older animation to finish.
+        var incomingOpacity = Math.Clamp(WallpaperTransitionImage.Opacity, 0, 1);
+        var outgoingOpacity = Math.Clamp(WallpaperOutgoingImage.Opacity, 0, 1);
+        var carrySource = incomingOpacity >= outgoingOpacity
+            ? WallpaperTransitionImage.Source
+            : WallpaperOutgoingImage.Source;
+        var carryOpacity = incomingOpacity >= outgoingOpacity
+            ? incomingOpacity
+            : outgoingOpacity;
+
+        _wallpaperTransitionVersion++;
+        var transitionVersion = _wallpaperTransitionVersion;
+        WallpaperTransitionImage.BeginAnimation(OpacityProperty, null);
+        WallpaperOutgoingImage.BeginAnimation(OpacityProperty, null);
+        _pendingWallpaperTransitionPath = null;
+
+        if (string.Equals(_committedWallpaperPath, targetPath, StringComparison.OrdinalIgnoreCase))
+        {
+            ClearWallpaperTransitionImages();
+            return true;
+        }
+
+        UpdateWallpaperTransitionClip();
+        if (carrySource is not null && carryOpacity > 0.01)
+        {
+            WallpaperOutgoingImage.Source = carrySource;
+            WallpaperOutgoingImage.Opacity = carryOpacity;
+            WallpaperOutgoingImage.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            WallpaperOutgoingImage.Source = null;
+            WallpaperOutgoingImage.Opacity = 0;
+            WallpaperOutgoingImage.Visibility = Visibility.Collapsed;
+            carryOpacity = 0;
+        }
+
+        _pendingWallpaperTransitionPath = targetPath;
+        WallpaperTransitionImage.Source = targetWallpaper;
+        WallpaperTransitionImage.Opacity = 0;
+        WallpaperTransitionImage.Visibility = Visibility.Visible;
+
+        var interrupted = carrySource is not null;
+        var duration = TimeSpan.FromMilliseconds(interrupted ? 330 : 520);
+        var easing = new CubicEase { EasingMode = EasingMode.EaseInOut };
+        if (carryOpacity > 0)
+        {
+            WallpaperOutgoingImage.BeginAnimation(OpacityProperty, new DoubleAnimation(carryOpacity, 0, duration)
+            {
+                EasingFunction = easing,
+                FillBehavior = FillBehavior.Stop
+            });
+        }
+
+        var reveal = new DoubleAnimation(0, 1, duration)
+        {
+            EasingFunction = easing,
+            FillBehavior = FillBehavior.Stop
+        };
+        reveal.Completed += (_, _) =>
+        {
+            if (transitionVersion != _wallpaperTransitionVersion)
+            {
+                return;
+            }
+
+            WallpaperTransitionImage.BeginAnimation(OpacityProperty, null);
+            WallpaperTransitionImage.Opacity = 1;
+            WallpaperOutgoingImage.BeginAnimation(OpacityProperty, null);
+            WallpaperOutgoingImage.Opacity = 0;
+            WallpaperOutgoingImage.Source = null;
+            WallpaperOutgoingImage.Visibility = Visibility.Collapsed;
+            if (!_wallpaperService.ApplyPath(targetPath))
+            {
+                _pendingWallpaperTransitionPath = null;
+                ClearWallpaperTransitionImages();
+                ShowStatus("背景图片暂时无法应用");
+                return;
+            }
+
+            _committedWallpaperPath = targetPath;
+            _pendingWallpaperTransitionPath = null;
+            _ = CompleteWallpaperHandoffAsync(transitionVersion);
+        };
+        WallpaperTransitionImage.BeginAnimation(OpacityProperty, reveal);
+        return true;
+    }
+
+    private async Task CompleteWallpaperHandoffAsync(int transitionVersion)
+    {
+        // Keep the fully opaque overlay briefly while Explorer redraws its wallpaper, then remove
+        // it in one frame. Both layers now contain the same image, so no extra full-screen fade is
+        // needed and the transparent WPF window does substantially less compositing work.
+        await Task.Delay(120);
+        if (transitionVersion == _wallpaperTransitionVersion)
+        {
+            ClearWallpaperTransitionImages();
+        }
+    }
+
+    private void ClearWallpaperTransitionImages()
+    {
+        WallpaperTransitionImage.BeginAnimation(OpacityProperty, null);
+        WallpaperTransitionImage.Opacity = 0;
+        WallpaperTransitionImage.Source = null;
+        WallpaperTransitionImage.Visibility = Visibility.Collapsed;
+        WallpaperOutgoingImage.BeginAnimation(OpacityProperty, null);
+        WallpaperOutgoingImage.Opacity = 0;
+        WallpaperOutgoingImage.Source = null;
+        WallpaperOutgoingImage.Visibility = Visibility.Collapsed;
+    }
+
+    private void UpdateWallpaperTransitionClip()
+    {
+        // The DeskNest window spans the virtual screen, including the taskbar strip. Wallpaper
+        // pixels only need to cover the desktop work area; clipping here keeps the Windows taskbar
+        // visible throughout the otherwise opaque cross-fade.
+        var workArea = SystemParameters.WorkArea;
+        var clip = new Rect(
+            workArea.Left - SystemParameters.VirtualScreenLeft,
+            workArea.Top - SystemParameters.VirtualScreenTop,
+            Math.Max(1, workArea.Width),
+            Math.Max(1, workArea.Height));
+        var geometry = new RectangleGeometry(clip);
+        geometry.Freeze();
+        WallpaperTransitionImage.Clip = geometry;
+        WallpaperOutgoingImage.Clip = geometry;
+    }
+
+    private static BitmapImage LoadWallpaperBitmap(string path)
+    {
+        var bitmap = new BitmapImage();
+        bitmap.BeginInit();
+        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+        bitmap.UriSource = new Uri(Path.GetFullPath(path), UriKind.Absolute);
+        bitmap.EndInit();
+        bitmap.Freeze();
+        return bitmap;
     }
 
     private void PreviewAppearance(bool animateToolbar)
@@ -1645,6 +1838,30 @@ public partial class MainWindow : System.Windows.Window
     {
         _saveTimer.Stop();
         _saveTimer.Start();
+    }
+
+    private async Task PreloadWallpaperBitmapsAsync()
+    {
+        var paths = _wallpaperService.GetBuiltInOptions()
+            .Select(option => _wallpaperService.ResolveSelection(option.Key))
+            .Where(path => path is not null)
+            .Cast<string>()
+            .ToArray();
+        await Task.Run(() =>
+        {
+            foreach (var path in paths)
+            {
+                try
+                {
+                    _wallpaperBitmapCache.TryAdd(path, LoadWallpaperBitmap(path));
+                }
+                catch (Exception exception) when (
+                    exception is IOException or UnauthorizedAccessException or NotSupportedException)
+                {
+                    // A missing optional wallpaper must not affect startup.
+                }
+            }
+        });
     }
 
     private static async Task TrimWorkingSetAfterStartupAsync()
