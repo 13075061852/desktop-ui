@@ -108,6 +108,10 @@ public sealed class JsonStateStore
         state.Theme = state.Theme is "Light" or "Dark" or "System" ? state.Theme : "System";
         state.PanelOpacity = Math.Clamp(state.PanelOpacity, 0.55, 0.98);
         state.IconSize = Math.Clamp(state.IconSize, 32, 72);
+        state.WallpaperSelection ??= string.Empty;
+        state.ToolbarAlignment = state.ToolbarAlignment is "Left" or "Center" or "Right"
+            ? state.ToolbarAlignment
+            : "Center";
         state.Zones ??= [];
 
         foreach (var zone in state.Zones)
@@ -116,8 +120,8 @@ public sealed class JsonStateStore
             zone.CategoryKey = string.IsNullOrWhiteSpace(zone.CategoryKey) ? "other" : zone.CategoryKey;
             zone.Name = string.IsNullOrWhiteSpace(zone.Name) ? "未命名分区" : zone.Name.Trim();
             zone.AccentColor = string.IsNullOrWhiteSpace(zone.AccentColor) ? "#7DD3FC" : zone.AccentColor;
-            zone.Width = Math.Clamp(zone.Width, 240, 900);
-            zone.Height = Math.Clamp(zone.Height, 120, 700);
+            zone.Width = Math.Max(200, zone.Width);
+            zone.Height = Math.Max(120, zone.Height);
             zone.Items ??= [];
 
             foreach (var item in zone.Items)

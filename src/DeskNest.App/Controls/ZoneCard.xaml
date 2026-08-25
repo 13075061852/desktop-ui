@@ -5,74 +5,192 @@
              AllowDrop="True"
              Drop="OnDrop"
              DragOver="OnDragOver">
+    <UserControl.Resources>
+        <Style x:Key="HeaderActionButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="28" />
+            <Setter Property="Height" Value="28" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="ButtonSurface" Background="{TemplateBinding Background}" CornerRadius="10">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ButtonSurface" Property="Background" Value="#1F526170" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="ButtonSurface" Property="Background" Value="#34526170" />
+                                <Setter TargetName="ButtonSurface" Property="Opacity" Value="0.76" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="ResizeHandleStyle" TargetType="primitives:Thumb">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="primitives:Thumb">
+                        <Border Background="Transparent" />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SlimThumbStyle" TargetType="primitives:Thumb">
+            <Setter Property="MinHeight" Value="28" />
+            <Setter Property="Background" Value="#66758496" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="primitives:Thumb">
+                        <Border x:Name="ThumbSurface" Width="3" Background="{TemplateBinding Background}" CornerRadius="2" />
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ThumbSurface" Property="Background" Value="#D076D7C4" />
+                            </Trigger>
+                            <Trigger Property="IsDragging" Value="True">
+                                <Setter TargetName="ThumbSurface" Property="Background" Value="#FF53CDB6" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SlimScrollBarStyle" TargetType="ScrollBar">
+            <Setter Property="Width" Value="3" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Width="3" Background="Transparent">
+                            <Track x:Name="PART_Track" IsDirectionReversed="True" Focusable="False">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" Focusable="False" />
+                                </Track.DecreaseRepeatButton>
+                                <Track.Thumb>
+                                    <primitives:Thumb Style="{StaticResource SlimThumbStyle}" />
+                                </Track.Thumb>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" Focusable="False" />
+                                </Track.IncreaseRepeatButton>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
     <Grid>
         <Border x:Name="CardBorder"
                 Background="{StaticResource PanelBrush}"
                 BorderBrush="{StaticResource StrokeBrush}"
                 BorderThickness="1"
-                CornerRadius="14">
+                CornerRadius="10">
             <Border.Effect>
-                <DropShadowEffect BlurRadius="24" ShadowDepth="6" Opacity="0.24" Color="#05080D" />
+                <DropShadowEffect x:Name="CardShadow" BlurRadius="22" ShadowDepth="5" Opacity="0.2" Color="#06101A" />
             </Border.Effect>
             <Grid>
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="56" />
+                    <RowDefinition Height="52" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
-                <Border Grid.Row="0" Background="Transparent" CornerRadius="14,14,0,0"
+                <Border x:Name="HeaderSurface" Grid.Row="0" Background="#EDF7F9FC" CornerRadius="10,10,0,0"
                         MouseLeftButtonDown="OnHeaderMouseDown"
                         MouseMove="OnHeaderMouseMove"
                         MouseLeftButtonUp="OnHeaderMouseUp">
-                    <Grid Margin="16,0,10,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <Ellipse x:Name="AccentDot" Width="8" Height="8" Margin="0,0,10,0" />
-                        <Grid Grid.Column="1" VerticalAlignment="Center">
-                            <TextBlock x:Name="TitleText" FontWeight="SemiBold" FontSize="15"
-                                       TextTrimming="CharacterEllipsis"
-                                       MouseLeftButtonDown="OnTitleDoubleClick" />
-                            <TextBox x:Name="TitleEditor" Visibility="Collapsed" Height="30"
-                                     VerticalContentAlignment="Center" Background="#28FFFFFF"
-                                     Foreground="{StaticResource TextPrimaryBrush}"
-                                     BorderBrush="{StaticResource StrokeBrush}" BorderThickness="1"
-                                     LostKeyboardFocus="OnTitleEditorLostFocus"
-                                     KeyDown="OnTitleEditorKeyDown" />
+                    <Grid>
+                        <Grid Margin="14,0,9,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <Ellipse x:Name="AccentDot" Width="7" Height="7" Margin="0,0,10,0" />
+                            <Grid Grid.Column="1" VerticalAlignment="Center" Margin="0,0,6,0">
+                                <TextBlock x:Name="TitleText" FontWeight="SemiBold" FontSize="14"
+                                           TextTrimming="CharacterEllipsis"
+                                           MouseLeftButtonDown="OnTitleDoubleClick" />
+                                <TextBox x:Name="TitleEditor" Visibility="Collapsed" Height="29"
+                                         VerticalContentAlignment="Center" Padding="7,0"
+                                         Background="#DFFFFFFF"
+                                         Foreground="{StaticResource TextPrimaryBrush}"
+                                         BorderBrush="{StaticResource StrokeBrush}" BorderThickness="1"
+                                         LostKeyboardFocus="OnTitleEditorLostFocus"
+                                         KeyDown="OnTitleEditorKeyDown" />
+                            </Grid>
+
+                            <Border x:Name="CountBadge" Grid.Column="2" MinWidth="26" Height="22" Padding="7,0"
+                                    Margin="2,0,3,0" CornerRadius="10" VerticalAlignment="Center"
+                                    Background="#15526170">
+                                <TextBlock x:Name="CountText" FontSize="10.5" FontWeight="SemiBold"
+                                           Foreground="{StaticResource TextMutedBrush}"
+                                           VerticalAlignment="Center" HorizontalAlignment="Center"
+                                           TextAlignment="Center" />
+                            </Border>
+
+                            <Button x:Name="CollapseButton" Grid.Column="3" Style="{StaticResource HeaderActionButtonStyle}"
+                                    ToolTip="折叠/展开" Click="OnCollapseClick">
+                                <Path x:Name="CollapseChevron" Data="M 2,6 L 6,2 L 10,6"
+                                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                      StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                            </Button>
+                            <Button x:Name="MoreButton" Grid.Column="4" Style="{StaticResource HeaderActionButtonStyle}"
+                                    ToolTip="分区菜单" Click="OnMoreClick">
+                                <StackPanel Orientation="Horizontal">
+                                    <Ellipse Width="3" Height="3" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                    <Ellipse Width="3" Height="3" Margin="2,0" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                    <Ellipse Width="3" Height="3" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                </StackPanel>
+                            </Button>
                         </Grid>
-                        <Border Grid.Column="2" Padding="7,3" Margin="6,0" CornerRadius="9" Background="#22FFFFFF">
-                            <TextBlock x:Name="CountText" FontSize="11" Foreground="{StaticResource TextMutedBrush}" />
-                        </Border>
-                        <Button x:Name="CollapseButton" Grid.Column="3" Style="{StaticResource IconButtonStyle}"
-                                Content="⌃" ToolTip="折叠/展开" Click="OnCollapseClick" />
-                        <Button x:Name="MoreButton" Grid.Column="4" Style="{StaticResource IconButtonStyle}"
-                                Content="•••" ToolTip="分区菜单" Click="OnMoreClick" />
+                        <Border x:Name="HeaderDivider" Height="1" VerticalAlignment="Bottom" Background="#14526170" />
                     </Grid>
                 </Border>
 
-                <ScrollViewer x:Name="BodyScroller" Grid.Row="1" Margin="10,2,8,12"
-                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                    <WrapPanel x:Name="ItemsPanel" Orientation="Horizontal" />
-                </ScrollViewer>
+                <Grid x:Name="BodyArea" Grid.Row="1" ClipToBounds="True">
+                    <ScrollViewer x:Name="BodyScroller" Margin="10,4,10,12"
+                                  VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled"
+                                  ScrollChanged="OnBodyScrollChanged">
+                        <WrapPanel x:Name="ItemsPanel" Orientation="Horizontal" />
+                    </ScrollViewer>
+                    <ScrollBar x:Name="SlimScrollBar" Orientation="Vertical" HorizontalAlignment="Right"
+                               Margin="0,9,5,10" Visibility="Collapsed"
+                               Style="{StaticResource SlimScrollBarStyle}" Scroll="OnSlimScroll" />
+                </Grid>
             </Grid>
         </Border>
 
-        <primitives:Thumb x:Name="ResizeThumb" Width="18" Height="18"
-                          HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                          Margin="0,0,2,2" Cursor="SizeNWSE"
-                          Background="Transparent" DragDelta="OnResizeDragDelta">
-            <primitives:Thumb.Template>
-                <ControlTemplate TargetType="primitives:Thumb">
-                    <Grid>
-                        <Path Data="M 3,14 L 14,3 M 8,14 L 14,8" Stroke="#80FFFFFF"
-                              StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
-                    </Grid>
-                </ControlTemplate>
-            </primitives:Thumb.Template>
-        </primitives:Thumb>
+        <Grid x:Name="ResizeLayer">
+            <primitives:Thumb Tag="Left" Width="7" HorizontalAlignment="Left" Cursor="SizeWE"
+                              Style="{StaticResource ResizeHandleStyle}" DragDelta="OnResizeDragDelta" />
+            <primitives:Thumb Tag="Right" Width="7" HorizontalAlignment="Right" Cursor="SizeWE"
+                              Style="{StaticResource ResizeHandleStyle}" DragDelta="OnResizeDragDelta" />
+            <primitives:Thumb Tag="Top" Height="7" VerticalAlignment="Top" Cursor="SizeNS"
+                              Style="{StaticResource ResizeHandleStyle}" DragDelta="OnResizeDragDelta" />
+            <primitives:Thumb Tag="Bottom" Height="7" VerticalAlignment="Bottom" Cursor="SizeNS"
+                              Style="{StaticResource ResizeHandleStyle}" DragDelta="OnResizeDragDelta" />
+
+            <primitives:Thumb Tag="TopLeft" Width="13" Height="13" HorizontalAlignment="Left" VerticalAlignment="Top"
+                              Cursor="SizeNWSE" Style="{StaticResource ResizeHandleStyle}" DragDelta="OnResizeDragDelta" />
+            <primitives:Thumb Tag="TopRight" Width="13" Height="13" HorizontalAlignment="Right" VerticalAlignment="Top"
+                              Cursor="SizeNESW" Style="{StaticResource ResizeHandleStyle}" DragDelta="OnResizeDragDelta" />
+            <primitives:Thumb Tag="BottomLeft" Width="13" Height="13" HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                              Cursor="SizeNESW" Style="{StaticResource ResizeHandleStyle}" DragDelta="OnResizeDragDelta" />
+            <primitives:Thumb Tag="BottomRight" Width="13" Height="13" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                              Cursor="SizeNWSE" Style="{StaticResource ResizeHandleStyle}" DragDelta="OnResizeDragDelta" />
+        </Grid>
     </Grid>
 </UserControl>

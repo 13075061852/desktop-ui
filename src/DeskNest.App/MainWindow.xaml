@@ -7,41 +7,108 @@
         Background="Transparent"
         ResizeMode="NoResize"
         ShowInTaskbar="False"
-        ShowActivated="False"
         Width="1600" Height="900"
         Left="0" Top="0">
     <Grid Background="{x:Null}">
         <Canvas x:Name="DesktopCanvas" Background="{x:Null}" />
+        <Canvas x:Name="AlignmentGuideCanvas" IsHitTestVisible="False">
+            <Line x:Name="VerticalAlignmentGuide" Visibility="Collapsed"
+                  Stroke="{StaticResource AccentBrush}" StrokeThickness="1"
+                  StrokeDashArray="4,4" Opacity="0.78">
+                <Line.Effect>
+                    <DropShadowEffect BlurRadius="5" ShadowDepth="0" Opacity="0.65" Color="#76D7C4" />
+                </Line.Effect>
+            </Line>
+            <Line x:Name="HorizontalAlignmentGuide" Visibility="Collapsed"
+                  Stroke="{StaticResource AccentBrush}" StrokeThickness="1"
+                  StrokeDashArray="4,4" Opacity="0.78">
+                <Line.Effect>
+                    <DropShadowEffect BlurRadius="5" ShadowDepth="0" Opacity="0.65" Color="#76D7C4" />
+                </Line.Effect>
+            </Line>
+        </Canvas>
 
         <Border x:Name="ToolbarBorder"
                 HorizontalAlignment="Center" VerticalAlignment="Top"
-                Margin="0,18,0,0" Padding="10,7"
+                Margin="12,12,12,0" Padding="12,7"
                 Background="{StaticResource PanelStrongBrush}"
                 BorderBrush="{StaticResource StrokeBrush}" BorderThickness="1"
-                CornerRadius="18">
+                CornerRadius="10">
             <Border.Effect>
                 <DropShadowEffect BlurRadius="26" ShadowDepth="6" Opacity="0.3" Color="#05080D" />
             </Border.Effect>
-            <StackPanel x:Name="ToolbarPanel" Orientation="Horizontal">
-                <StackPanel Orientation="Horizontal" Margin="5,0,10,0" VerticalAlignment="Center">
-                    <Border Width="27" Height="27" CornerRadius="9" Background="{StaticResource AccentBrush}">
-                        <TextBlock Text="栖" Foreground="#14221F" FontWeight="Bold"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </Border>
-                    <TextBlock x:Name="BrandText" Text="栖格" Margin="8,0,4,0" FontWeight="SemiBold"
-                               FontSize="14" VerticalAlignment="Center" />
-                </StackPanel>
-                <Border Width="1" Height="20" Background="{StaticResource StrokeBrush}" Margin="0,0,4,0" />
-                <Button Style="{StaticResource ToolbarButtonStyle}" Content="＋ 新建分区" Click="OnNewZoneClick" />
-                <Button Style="{StaticResource PrimaryButtonStyle}" Content="✦ 一键整理" Margin="4,0" Click="OnOrganizeClick" />
-                <Button x:Name="LockButton" Style="{StaticResource ToolbarButtonStyle}" Content="◇ 锁定布局" Click="OnToggleLockClick" />
-                <Button x:Name="IconVisibilityButton" Style="{StaticResource ToolbarButtonStyle}" Content="◉ 隐藏原图标" Click="OnToggleIconsClick" />
-                <Button Style="{StaticResource IconButtonStyle}" Content="⚙" Margin="4,0,0,0" ToolTip="设置" Click="OnSettingsClick" />
+            <Border.RenderTransform>
+                <TranslateTransform x:Name="ToolbarTranslation" />
+            </Border.RenderTransform>
+            <StackPanel x:Name="ToolbarPanel" Orientation="Horizontal" VerticalAlignment="Center">
+                <Border Width="32" Height="32" Margin="0,0,12,0" CornerRadius="10"
+                        Background="{StaticResource AccentBrush}" ToolTip="栖格 · DeskNest">
+                    <Viewbox Width="19" Height="19" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Canvas Width="24" Height="24">
+                            <Path Data="M 4,8 C 7,10.5 17,10.5 20,8 M 5.5,12 C 8.5,14.5 15.5,14.5 18.5,12 M 7.5,16 C 10,18 14,18 16.5,16"
+                                  Stroke="#FF14231F" StrokeThickness="2" Fill="Transparent"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                            <Ellipse Canvas.Left="10" Canvas.Top="3" Width="4" Height="4" Fill="#FF14231F" />
+                        </Canvas>
+                    </Viewbox>
+                </Border>
+                <Border x:Name="ToolbarDivider" Width="1" Height="22" Margin="0,0,6,0" VerticalAlignment="Center" />
+
+                <Button x:Name="NewZoneButton" Style="{StaticResource ToolbarButtonStyle}" Margin="6,0" Click="OnNewZoneClick">
+                    <StackPanel Orientation="Horizontal">
+                        <Path Width="12" Height="12" Data="M 6,1 L 6,11 M 1,6 L 11,6" Stretch="Uniform"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                        <TextBlock Text="新建分区" Margin="7,0,0,0"
+                                   Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                    </StackPanel>
+                </Button>
+
+                <Button x:Name="OrganizeButton" Style="{StaticResource PrimaryButtonStyle}" Margin="6,0" Click="OnOrganizeClick">
+                    <StackPanel Orientation="Horizontal">
+                        <Path Width="13" Height="13" Data="M 6.5,0 L 7.8,4.2 L 12,5.5 L 7.8,6.8 L 6.5,11 L 5.2,6.8 L 1,5.5 L 5.2,4.2 Z"
+                              Stretch="Uniform" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                        <TextBlock Text="一键整理" Margin="7,0,0,0" FontWeight="SemiBold"
+                                   Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                    </StackPanel>
+                </Button>
+
+                <Button x:Name="LockButton" Style="{StaticResource ToolbarButtonStyle}" Margin="6,0" Click="OnToggleLockClick">
+                    <StackPanel Orientation="Horizontal">
+                        <Path x:Name="LockButtonIcon" Width="12" Height="13"
+                              Data="M 2,5 L 10,5 L 10,12 L 2,12 Z M 3,5 L 3,3.5 C 3,1.5 4.5,1 6,1 C 7.5,1 9,2 9,3.5 L 9,5"
+                              Stretch="Uniform" Fill="Transparent"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.4" />
+                        <TextBlock x:Name="LockButtonText" Text="锁定布局" Margin="7,0,0,0"
+                                   Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                    </StackPanel>
+                </Button>
+
+                <Button x:Name="DesktopModeButton" Style="{StaticResource ToolbarButtonStyle}" Margin="6,0"
+                        ToolTip="切换桌面模式" Click="OnToggleDesktopModeClick">
+                    <StackPanel Orientation="Horizontal">
+                        <Path x:Name="DesktopModeIcon" Width="14" Height="14"
+                              Data="M 1,1 L 6,1 L 6,6 L 1,6 Z M 8,1 L 13,1 L 13,6 L 8,6 Z M 1,8 L 6,8 L 6,13 L 1,13 Z M 8,8 L 13,8 L 13,13 L 8,13 Z"
+                              Stretch="Uniform" Fill="Transparent"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.2" StrokeLineJoin="Round" />
+                        <TextBlock x:Name="DesktopModeText" Text="系统模式" Margin="7,0,0,0"
+                                   Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                    </StackPanel>
+                </Button>
+
+                <Button x:Name="SettingsButton" Style="{StaticResource IconButtonStyle}" Margin="6,0,0,0" ToolTip="设置" Click="OnSettingsClick">
+                    <Path Width="15" Height="15" Data="M 2,3 L 13,3 M 2,7.5 L 13,7.5 M 2,12 L 13,12 M 5,1 L 5,5 M 10,5.5 L 10,9.5 M 7,10 L 7,14"
+                          Stretch="Uniform" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          StrokeThickness="1.4" StrokeStartLineCap="Round" />
+                </Button>
             </StackPanel>
         </Border>
 
-        <Border x:Name="StatusBorder" HorizontalAlignment="Center" VerticalAlignment="Bottom"
-                Margin="0,0,0,22" Padding="13,7" CornerRadius="14"
+        <Canvas x:Name="ToolbarRocketCanvas" IsHitTestVisible="False" />
+
+        <Border x:Name="StatusBorder" HorizontalAlignment="Center" VerticalAlignment="Center"
+                Padding="13,7" CornerRadius="10"
                 Background="{StaticResource PanelStrongBrush}" BorderBrush="{StaticResource StrokeBrush}"
                 BorderThickness="1" Visibility="Collapsed" IsHitTestVisible="False">
             <StackPanel Orientation="Horizontal">

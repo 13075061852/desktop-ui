@@ -7,7 +7,6 @@ namespace DeskNest.App.Services;
 
 internal sealed class DesktopHostService
 {
-    private nint _hostHandle;
     private nint _windowHandle;
 
     public bool IsEmbedded { get; private set; }
@@ -21,31 +20,11 @@ internal sealed class DesktopHostService
             return false;
         }
 
-        _hostHandle = FindDesktopWorker();
-        if (_hostHandle == 0)
-        {
-            PlaceAtBottom();
-            return false;
-        }
-
-        var style = NativeMethods.GetWindowLongPtr(_windowHandle, NativeMethods.GwlStyle).ToInt64();
-        style = (style & ~NativeMethods.WsPopup) | NativeMethods.WsChild;
-        NativeMethods.SetWindowLongPtr(_windowHandle, NativeMethods.GwlStyle, new nint(style));
-
-        var exStyle = NativeMethods.GetWindowLongPtr(_windowHandle, NativeMethods.GwlExStyle).ToInt64();
-        exStyle |= NativeMethods.WsExToolWindow | NativeMethods.WsExNoActivate;
-        NativeMethods.SetWindowLongPtr(_windowHandle, NativeMethods.GwlExStyle, new nint(exStyle));
-
-        NativeMethods.SetParent(_windowHandle, _hostHandle);
-        IsEmbedded = NativeMethods.GetParent(_windowHandle) == _hostHandle;
-        if (!IsEmbedded)
-        {
-            PlaceAtBottom();
-            return false;
-        }
-
-        ResizeToVirtualScreen();
-        return true;
+        // Keep the overlay as an independent bottom-most window. Parenting a transparent WPF
+        // window to Explorer's DefView/WorkerW can leave a visible but non-interactive ghost when
+        // Explorer rebuilds its desktop hierarchy after wallpaper or Show Desktop changes.
+        PlaceAtBottom();
+        return false;
     }
 
     public void ResizeToVirtualScreen()
@@ -69,14 +48,14 @@ internal sealed class DesktopHostService
 
     public bool Reattach(Window window)
     {
-        if (_hostHandle != 0 && NativeMethods.IsWindow(_hostHandle) &&
-            NativeMethods.GetParent(_windowHandle) == _hostHandle)
+        ArgumentNullException.ThrowIfNull(window);
+        if (_windowHandle == 0)
         {
-            return IsEmbedded;
+            _windowHandle = new WindowInteropHelper(window).Handle;
         }
 
-        IsEmbedded = false;
-        return TryEmbed(window);
+        PlaceAtBottom();
+        return false;
     }
 
     private void PlaceAtBottom()
@@ -92,34 +71,4 @@ internal sealed class DesktopHostService
             NativeMethods.SwpNoActivate | NativeMethods.SwpShowWindow);
     }
 
-    private static nint FindDesktopWorker()
-    {
-        var progman = NativeMethods.FindWindow("Progman", null);
-        if (progman != 0)
-        {
-            NativeMethods.SendMessageTimeout(
-                progman,
-                NativeMethods.WmSpawnWorker,
-                0,
-                0,
-                NativeMethods.SmtoNormal,
-                1000,
-                out _);
-        }
-
-        nint worker = 0;
-        NativeMethods.EnumWindows((topLevel, _) =>
-        {
-            var shellView = NativeMethods.FindWindowEx(topLevel, 0, "SHELLDLL_DefView", null);
-            if (shellView == 0)
-            {
-                return true;
-            }
-
-            worker = NativeMethods.FindWindowEx(0, topLevel, "WorkerW", null);
-            return worker == 0;
-        }, 0);
-
-        return worker != 0 ? worker : progman;
-    }
 }

@@ -15,7 +15,11 @@ internal sealed class DesktopIconVisibilityService
         }
     }
 
-    public bool SetVisible(bool visible)
+    public bool SetVisible(bool visible) => SetVisibleCore(visible, rememberInitialState: true);
+
+    public bool SetVisibleWithoutTracking(bool visible) => SetVisibleCore(visible, rememberInitialState: false);
+
+    private bool SetVisibleCore(bool visible, bool rememberInitialState)
     {
         var listView = FindDesktopListView();
         if (listView == 0)
@@ -23,7 +27,11 @@ internal sealed class DesktopIconVisibilityService
             return false;
         }
 
-        _initialVisibility ??= NativeMethods.IsWindowVisible(listView);
+        if (rememberInitialState)
+        {
+            _initialVisibility ??= NativeMethods.IsWindowVisible(listView);
+        }
+
         NativeMethods.ShowWindow(listView, visible ? NativeMethods.SwShow : NativeMethods.SwHide);
         return NativeMethods.IsWindowVisible(listView) == visible;
     }

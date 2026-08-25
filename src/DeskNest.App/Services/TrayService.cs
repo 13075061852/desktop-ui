@@ -14,17 +14,17 @@ internal sealed class TrayService : IDisposable
 
     private readonly Action _show;
     private readonly Action _organize;
-    private readonly Action _toggleIcons;
+    private readonly Action _toggleDesktopMode;
     private readonly Action _exit;
     private readonly HwndSource _messageWindow;
     private NativeMethods.NotifyIconData _iconData;
     private bool _disposed;
 
-    public TrayService(Action show, Action organize, Action toggleIcons, Action exit)
+    public TrayService(Action show, Action organize, Action toggleDesktopMode, Action exit)
     {
         _show = show;
         _organize = organize;
-        _toggleIcons = toggleIcons;
+        _toggleDesktopMode = toggleDesktopMode;
         _exit = exit;
 
         var parameters = new HwndSourceParameters("DeskNest.TrayMessageWindow")
@@ -101,7 +101,7 @@ internal sealed class TrayService : IDisposable
         };
         menu.Items.Add(CreateMenuItem("显示栖格", _show));
         menu.Items.Add(CreateMenuItem("一键整理", _organize));
-        menu.Items.Add(CreateMenuItem("显示/隐藏原图标", _toggleIcons));
+        menu.Items.Add(CreateMenuItem("切换桌面模式", _toggleDesktopMode));
         menu.Items.Add(new Separator());
         menu.Items.Add(CreateMenuItem("退出", _exit));
         menu.IsOpen = true;

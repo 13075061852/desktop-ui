@@ -5,6 +5,13 @@ namespace DeskNest.App.Interop;
 internal static class NativeMethods
 {
     internal const uint WmSpawnWorker = 0x052C;
+    internal const uint SpiGetDesktopWallpaper = 0x0073;
+    internal const uint SpiSetDesktopWallpaper = 0x0014;
+    internal const uint SpifUpdateIniFile = 0x0001;
+    internal const uint SpifSendChange = 0x0002;
+    internal const int WmNcHitTest = 0x0084;
+    internal const int HtTransparent = -1;
+    internal const int HtClient = 1;
     internal const uint SmtoNormal = 0;
     internal const int GwlStyle = -16;
     internal const int GwlExStyle = -20;
@@ -19,7 +26,12 @@ internal static class NativeMethods
     internal static readonly nint HwndBottom = 1;
 
     internal const uint ShgfiIcon = 0x000000100;
+    internal const uint ShgfiLargeIcon = 0x000000000;
     internal const uint ShgfiSmallIcon = 0x000000001;
+    internal const uint ShgfiSysIconIndex = 0x000004000;
+    internal const int ShilLarge = 0;
+    internal const int ShilExtraLarge = 2;
+    internal const int IldTransparent = 0x00000001;
     internal const uint NimAdd = 0x00000000;
     internal const uint NimModify = 0x00000001;
     internal const uint NimDelete = 0x00000002;
@@ -94,6 +106,22 @@ internal static class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool ShowWindow(nint window, int command);
 
+    [DllImport("user32.dll", EntryPoint = "SystemParametersInfoW", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool SystemParametersInfoGet(
+        uint action,
+        uint parameter,
+        System.Text.StringBuilder value,
+        uint flags);
+
+    [DllImport("user32.dll", EntryPoint = "SystemParametersInfoW", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool SystemParametersInfoSet(
+        uint action,
+        uint parameter,
+        string value,
+        uint flags);
+
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool IsWindowVisible(nint window);
@@ -105,6 +133,12 @@ internal static class NativeMethods
         out ShellFileInfo fileInfo,
         uint fileInfoSize,
         uint flags);
+
+    [DllImport("shell32.dll", EntryPoint = "SHGetImageList")]
+    internal static extern int SHGetImageList(
+        int imageList,
+        ref Guid interfaceId,
+        [MarshalAs(UnmanagedType.Interface)] out IImageList result);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -144,6 +178,36 @@ internal static class NativeMethods
         public uint InfoFlags;
         public Guid GuidItem;
         public nint BalloonIcon;
+    }
+
+    [ComImport]
+    [Guid("46EB5926-582E-4017-9FDF-E8998DAA0950")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IImageList
+    {
+        [PreserveSig]
+        int Add(nint image, nint mask, out int index);
+
+        [PreserveSig]
+        int ReplaceIcon(int index, nint icon, out int newIndex);
+
+        [PreserveSig]
+        int SetOverlayImage(int imageIndex, int overlayIndex);
+
+        [PreserveSig]
+        int Replace(int index, nint image, nint mask);
+
+        [PreserveSig]
+        int AddMasked(nint image, int maskColor, out int index);
+
+        [PreserveSig]
+        int Draw(nint drawParameters);
+
+        [PreserveSig]
+        int Remove(int index);
+
+        [PreserveSig]
+        int GetIcon(int index, int flags, out nint icon);
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]

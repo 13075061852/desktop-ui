@@ -14,6 +14,10 @@ public sealed class AppState
 
     public double IconSize { get; set; } = 44;
 
+    public string WallpaperSelection { get; set; } = string.Empty;
+
+    public string ToolbarAlignment { get; set; } = "Center";
+
     public List<ZoneModel> Zones { get; set; } = [];
 
     public static AppState CreateDefault()

@@ -9,6 +9,16 @@
     <SolidColorBrush x:Key="StrokeBrush" Color="#38FFFFFF" />
     <SolidColorBrush x:Key="AccentBrush" Color="#76D7C4" />
     <SolidColorBrush x:Key="DangerBrush" Color="#FF8398" />
+    <SolidColorBrush x:Key="ToolbarHoverBrush" Color="#22FFFFFF" />
+    <SolidColorBrush x:Key="MenuSurfaceBrush" Color="#FF18212D" />
+    <SolidColorBrush x:Key="MenuHoverBrush" Color="#FF2A3949" />
+    <SolidColorBrush x:Key="MenuTextBrush" Color="#FFF7F9FC" />
+    <SolidColorBrush x:Key="MenuMutedBrush" Color="#FFAAB5C5" />
+    <SolidColorBrush x:Key="MenuStrokeBrush" Color="#3FFFFFFF" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuBrushKey}" Color="#F51A202B" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuTextBrushKey}" Color="#F7F9FC" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#365266" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="#FFFFFF" />
 
     <Style TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{StaticResource DeskNestFont}" />
@@ -20,17 +30,18 @@
         <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
-        <Setter Property="Padding" Value="12,8" />
+        <Setter Property="Padding" Value="9,7" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
-                    <Border x:Name="Root" Background="{TemplateBinding Background}" CornerRadius="8">
+                    <Border x:Name="Root" Background="{TemplateBinding Background}" CornerRadius="10"
+                            Padding="{TemplateBinding Padding}">
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Root" Property="Background" Value="{StaticResource PanelHoverBrush}" />
+                            <Setter TargetName="Root" Property="Background" Value="{DynamicResource ToolbarHoverBrush}" />
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
                             <Setter TargetName="Root" Property="Opacity" Value="0.72" />
@@ -55,7 +66,104 @@
         <Setter Property="Background" Value="{StaticResource AccentBrush}" />
         <Setter Property="Foreground" Value="#10201E" />
         <Setter Property="FontWeight" Value="SemiBold" />
-        <Setter Property="Padding" Value="18,9" />
+        <Setter Property="Padding" Value="13,7" />
+    </Style>
+
+    <Style TargetType="ContextMenu">
+        <Setter Property="Background" Value="{DynamicResource MenuSurfaceBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource MenuTextBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource MenuStrokeBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Padding" Value="5" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ContextMenu">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="10" Padding="{TemplateBinding Padding}">
+                        <Border.Effect>
+                            <DropShadowEffect BlurRadius="20" ShadowDepth="5" Opacity="0.34" Color="#05080D" />
+                        </Border.Effect>
+                        <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="MenuItem">
+        <Setter Property="Foreground" Value="{DynamicResource MenuTextBrush}" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="MinWidth" Value="156" />
+        <Setter Property="Height" Value="34" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="MenuItem">
+                    <Grid>
+                        <Border x:Name="MenuItemRoot" Background="{TemplateBinding Background}" CornerRadius="10">
+                            <Grid Margin="8,0,7,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="22" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="16" />
+                                </Grid.ColumnDefinitions>
+                                <ContentPresenter Grid.Column="0" Content="{TemplateBinding Icon}"
+                                                  HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                <Path x:Name="CheckMark" Grid.Column="0" Data="M 2,6 L 5,9 L 11,2"
+                                      Stroke="{DynamicResource AccentBrush}" StrokeThickness="1.8"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      Visibility="Collapsed" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                <TextBlock Grid.Column="1" Text="{Binding Header, RelativeSource={RelativeSource TemplatedParent}}"
+                                           VerticalAlignment="Center" Margin="2,0,8,0"
+                                           Foreground="{Binding Foreground, RelativeSource={RelativeSource TemplatedParent}}" />
+                                <Path x:Name="SubmenuArrow" Grid.Column="2" Data="M 2,1 L 6,5 L 2,9"
+                                      Stroke="{DynamicResource MenuMutedBrush}" StrokeThickness="1.4"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      Visibility="Collapsed" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Grid>
+                        </Border>
+                        <Popup x:Name="PART_Popup" Placement="Right" PlacementTarget="{Binding ElementName=MenuItemRoot}"
+                               IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}"
+                               AllowsTransparency="True" Focusable="False" PopupAnimation="Fade">
+                            <Border Background="{DynamicResource MenuSurfaceBrush}"
+                                    BorderBrush="{DynamicResource MenuStrokeBrush}" BorderThickness="1"
+                                    CornerRadius="10" Padding="5" Margin="3,-5,0,0">
+                                <Border.Effect>
+                                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.32" Color="#05080D" />
+                                </Border.Effect>
+                                <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle" />
+                            </Border>
+                        </Popup>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsHighlighted" Value="True">
+                            <Setter TargetName="MenuItemRoot" Property="Background" Value="{DynamicResource MenuHoverBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="CheckMark" Property="Visibility" Value="Visible" />
+                        </Trigger>
+                        <Trigger Property="HasItems" Value="True">
+                            <Setter TargetName="SubmenuArrow" Property="Visibility" Value="Visible" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="MenuItemRoot" Property="Opacity" Value="0.42" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="Separator">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Separator">
+                    <Border Height="1" Background="{DynamicResource MenuStrokeBrush}" Margin="8,4" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
     </Style>
 
     <Style TargetType="ToolTip">

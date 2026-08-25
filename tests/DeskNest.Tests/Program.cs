@@ -32,6 +32,162 @@ var tests = new List<(string Name, Action Run)>
             Directory.Delete(root, recursive: true);
         }
     }),
+    ("zone collision keeps a twelve pixel gap while moving", () =>
+    {
+        var current = new ZoneBounds(0, 72, 200, 200);
+        var obstacle = new ZoneBounds(300, 72, 200, 200);
+        var result = ZoneCollisionResolver.Constrain(
+            current,
+            new ZoneBounds(520, 72, 200, 200),
+            new[] { obstacle },
+            12,
+            0,
+            72,
+            1200,
+            900);
+
+        Assert.Near(88, result.X, 0.1);
+    }),
+    ("zone collision lets vertical movement continue when horizontal movement is blocked", () =>
+    {
+        var current = new ZoneBounds(0, 72, 200, 200);
+        var obstacle = new ZoneBounds(300, 72, 200, 200);
+        var result = ZoneCollisionResolver.Constrain(
+            current,
+            new ZoneBounds(520, 150, 200, 200),
+            new[] { obstacle },
+            12,
+            0,
+            72,
+            1200,
+            900);
+
+        Assert.Near(88, result.X, 0.1);
+        Assert.Near(150, result.Y, 0.1);
+    }),
+    ("zone collision lets horizontal movement continue when vertical movement is blocked", () =>
+    {
+        var current = new ZoneBounds(0, 72, 200, 200);
+        var obstacle = new ZoneBounds(0, 350, 200, 200);
+        var result = ZoneCollisionResolver.Constrain(
+            current,
+            new ZoneBounds(100, 600, 200, 200),
+            new[] { obstacle },
+            12,
+            0,
+            72,
+            1200,
+            900);
+
+        Assert.Near(100, result.X, 0.1);
+        Assert.Near(138, result.Y, 0.1);
+    }),
+    ("zone collision resumes blocked movement after sliding past an obstacle", () =>
+    {
+        var current = new ZoneBounds(0, 72, 200, 200);
+        var obstacle = new ZoneBounds(300, 72, 200, 200);
+        var result = ZoneCollisionResolver.Constrain(
+            current,
+            new ZoneBounds(520, 300, 200, 200),
+            new[] { obstacle },
+            12,
+            0,
+            72,
+            1200,
+            900);
+
+        Assert.Near(520, result.X, 0.1);
+        Assert.Near(300, result.Y, 0.1);
+    }),
+    ("zone collision limits resizing before another zone", () =>
+    {
+        var current = new ZoneBounds(0, 72, 200, 200);
+        var obstacle = new ZoneBounds(300, 72, 200, 200);
+        var result = ZoneCollisionResolver.Constrain(
+            current,
+            new ZoneBounds(0, 72, 500, 200),
+            new[] { obstacle },
+            12,
+            0,
+            72,
+            1200,
+            900);
+
+        Assert.Near(288, result.Width, 0.1);
+    }),
+    ("zone collision preserves visible left and right desktop insets", () =>
+    {
+        var current = new ZoneBounds(100, 72, 200, 200);
+        var left = ZoneCollisionResolver.Constrain(
+            current, current with { X = 0 }, Array.Empty<ZoneBounds>(), 12, 12, 72, 1188, 900);
+        var right = ZoneCollisionResolver.Constrain(
+            current, current with { X = 1100 }, Array.Empty<ZoneBounds>(), 12, 12, 72, 1188, 900);
+
+        Assert.Near(12, left.X, 0.1);
+        Assert.Near(988, right.X, 0.1);
+    }),
+    ("zone alignment snaps moving edges within ten pixels", () =>
+    {
+        var current = new ZoneBounds(20, 400, 200, 200);
+        var desired = new ZoneBounds(94, 400, 200, 200);
+        var obstacle = new ZoneBounds(100, 72, 200, 200);
+        var result = ZoneAlignmentResolver.Snap(
+            current, desired, desired, new[] { obstacle }, 10, 12, 0, 72, 1200, 900);
+
+        Assert.Near(100, result.Bounds.X, 0.1);
+        Assert.Near(100, result.VerticalGuide ?? -1, 0.1);
+    }),
+    ("zone alignment releases after moving beyond ten pixels", () =>
+    {
+        var current = new ZoneBounds(20, 400, 200, 200);
+        var desired = new ZoneBounds(111, 400, 200, 200);
+        var obstacle = new ZoneBounds(100, 72, 200, 200);
+        var result = ZoneAlignmentResolver.Snap(
+            current, desired, desired, new[] { obstacle }, 10, 12, 0, 72, 1200, 900);
+
+        Assert.Near(111, result.Bounds.X, 0.1);
+        Assert.Equal<double?>(null, result.VerticalGuide);
+    }),
+    ("zone alignment snaps horizontal and vertical axes independently", () =>
+    {
+        var current = new ZoneBounds(20, 400, 200, 150);
+        var desired = new ZoneBounds(94, 294, 200, 150);
+        var obstacles = new[]
+        {
+            new ZoneBounds(100, 72, 200, 200),
+            new ZoneBounds(500, 100, 200, 200)
+        };
+        var result = ZoneAlignmentResolver.Snap(
+            current, desired, desired, obstacles, 10, 12, 0, 72, 1200, 900);
+
+        Assert.Near(100, result.Bounds.X, 0.1);
+        Assert.Near(300, result.Bounds.Y, 0.1);
+        Assert.Near(100, result.VerticalGuide ?? -1, 0.1);
+        Assert.Near(300, result.HorizontalGuide ?? -1, 0.1);
+    }),
+    ("zone alignment snaps a resized edge", () =>
+    {
+        var current = new ZoneBounds(100, 72, 200, 200);
+        var desired = new ZoneBounds(100, 72, 395, 200);
+        var obstacle = new ZoneBounds(500, 400, 200, 200);
+        var result = ZoneAlignmentResolver.Snap(
+            current, desired, desired, new[] { obstacle }, 10, 12, 0, 72, 1200, 900);
+
+        Assert.Near(400, result.Bounds.Width, 0.1);
+        Assert.Near(500, result.VerticalGuide ?? -1, 0.1);
+    }),
+    ("zone alignment rejects a snap that violates collision spacing", () =>
+    {
+        var current = new ZoneBounds(0, 72, 200, 200);
+        var desired = new ZoneBounds(94, 72, 200, 200);
+        var obstacle = new ZoneBounds(300, 72, 200, 200);
+        var collisionSafe = new ZoneBounds(88, 72, 200, 200);
+        var result = ZoneAlignmentResolver.Snap(
+            current, desired, collisionSafe, new[] { obstacle }, 10, 12, 0, 72, 1200, 900);
+
+        Assert.Near(88, result.Bounds.X, 0.1);
+        Assert.Equal<double?>(null, result.VerticalGuide);
+    }),
     ("state store round-trips state", () =>
     {
         WithTempDirectory(root =>
@@ -40,12 +196,16 @@ var tests = new List<(string Name, Action Run)>
             var store = new JsonStateStore(path);
             var expected = AppState.CreateDefault();
             expected.LayoutLocked = true;
+            expected.WallpaperSelection = "mist-mountains";
+            expected.ToolbarAlignment = "Right";
             expected.Zones[0].Name = "高频工具";
 
             store.SaveAsync(expected).GetAwaiter().GetResult();
             var actual = store.LoadAsync().GetAwaiter().GetResult();
 
             Assert.Equal(true, actual.LayoutLocked);
+            Assert.Equal("mist-mountains", actual.WallpaperSelection);
+            Assert.Equal("Right", actual.ToolbarAlignment);
             Assert.Equal("高频工具", actual.Zones[0].Name);
         });
     }),
@@ -126,6 +286,14 @@ internal static class Assert
         if (!expected.SequenceEqual(actual))
         {
             throw new InvalidOperationException("Sequences are not equal.");
+        }
+    }
+
+    public static void Near(double expected, double actual, double tolerance)
+    {
+        if (Math.Abs(expected - actual) > tolerance)
+        {
+            throw new InvalidOperationException($"Expected '{expected}' ± {tolerance}, received '{actual}'.");
         }
     }
 }

@@ -18,13 +18,77 @@ internal sealed class ShellIconService
             return cached;
         }
 
+        var source = TryGetSystemImageListIcon(path) ?? TryGetLargeShellIcon(path);
+        if (source is not null)
+        {
+            source.Freeze();
+            _cache[path] = source;
+        }
+
+        return source;
+    }
+
+    private static BitmapSource? TryGetSystemImageListIcon(string path)
+    {
         var result = NativeMethods.SHGetFileInfo(
             path,
             0,
             out var fileInfo,
             (uint)Marshal.SizeOf<NativeMethods.ShellFileInfo>(),
-            NativeMethods.ShgfiIcon | NativeMethods.ShgfiSmallIcon);
+            NativeMethods.ShgfiSysIconIndex);
+        if (result == 0)
+        {
+            return null;
+        }
 
+        foreach (var imageListSize in new[] { NativeMethods.ShilExtraLarge, NativeMethods.ShilLarge })
+        {
+            NativeMethods.IImageList? imageList = null;
+            nint iconHandle = 0;
+            try
+            {
+                var interfaceId = typeof(NativeMethods.IImageList).GUID;
+                if (NativeMethods.SHGetImageList(imageListSize, ref interfaceId, out imageList) < 0 ||
+                    imageList.GetIcon(fileInfo.IconIndex, NativeMethods.IldTransparent, out iconHandle) < 0 ||
+                    iconHandle == 0)
+                {
+                    continue;
+                }
+
+                return Imaging.CreateBitmapSourceFromHIcon(
+                    iconHandle,
+                    Int32Rect.Empty,
+                    BitmapSizeOptions.FromEmptyOptions());
+            }
+            catch (COMException)
+            {
+                // Older Explorer versions may not expose the requested image-list size.
+            }
+            finally
+            {
+                if (iconHandle != 0)
+                {
+                    NativeMethods.DestroyIcon(iconHandle);
+                }
+
+                if (imageList is not null && Marshal.IsComObject(imageList))
+                {
+                    Marshal.FinalReleaseComObject(imageList);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static BitmapSource? TryGetLargeShellIcon(string path)
+    {
+        var result = NativeMethods.SHGetFileInfo(
+            path,
+            0,
+            out var fileInfo,
+            (uint)Marshal.SizeOf<NativeMethods.ShellFileInfo>(),
+            NativeMethods.ShgfiIcon | NativeMethods.ShgfiLargeIcon);
         if (result == 0 || fileInfo.IconHandle == 0)
         {
             return null;
@@ -32,13 +96,10 @@ internal sealed class ShellIconService
 
         try
         {
-            var source = Imaging.CreateBitmapSourceFromHIcon(
+            return Imaging.CreateBitmapSourceFromHIcon(
                 fileInfo.IconHandle,
                 Int32Rect.Empty,
-                BitmapSizeOptions.FromWidthAndHeight(32, 32));
-            source.Freeze();
-            _cache[path] = source;
-            return source;
+                BitmapSizeOptions.FromEmptyOptions());
         }
         finally
         {
