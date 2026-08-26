@@ -926,26 +926,102 @@ public partial class MainWindow : System.Windows.Window
 
     private void AddPathsToZone(ZoneModel targetZone, IReadOnlyList<string> paths)
     {
-        var added = 0;
-        foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
+        var desktop = Path.GetFullPath(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory))
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var moved = 0;
+        var mapped = 0;
+        var skipped = 0;
+
+        foreach (var sourcePath in paths.Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            if (!File.Exists(path) && !Directory.Exists(path))
+            if (!File.Exists(sourcePath) && !Directory.Exists(sourcePath))
             {
+                skipped++;
                 continue;
+            }
+
+            string source;
+            try
+            {
+                source = Path.GetFullPath(sourcePath);
+            }
+            catch (ArgumentException)
+            {
+                skipped++;
+                continue;
+            }
+
+            if (string.Equals(source.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), desktop,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                skipped++;
+                continue;
+            }
+
+            var sourceParent = Path.GetDirectoryName(source)?.TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar);
+            var destination = source;
+            var isAlreadyOnDesktop = string.Equals(sourceParent, desktop, StringComparison.OrdinalIgnoreCase);
+
+            if (!isAlreadyOnDesktop)
+            {
+                var isDirectory = Directory.Exists(source);
+                var name = Path.GetFileName(source.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                destination = isDirectory
+                    ? GetUniquePath(desktop, name, string.Empty)
+                    : GetUniquePath(desktop, Path.GetFileNameWithoutExtension(source), Path.GetExtension(source));
+                try
+                {
+                    if (isDirectory)
+                    {
+                        Directory.Move(source, destination);
+                    }
+                    else
+                    {
+                        File.Move(source, destination);
+                    }
+
+                    moved++;
+                }
+                catch (IOException)
+                {
+                    skipped++;
+                    continue;
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    skipped++;
+                    continue;
+                }
             }
 
             foreach (var zone in _state.Zones)
             {
-                zone.Items.RemoveAll(item => string.Equals(item.Path, path, StringComparison.OrdinalIgnoreCase));
+                zone.Items.RemoveAll(item =>
+                    !DesktopItem.IsShellLocation(item.Path) &&
+                    string.Equals(Path.GetFullPath(item.Path), source, StringComparison.OrdinalIgnoreCase));
             }
 
-            targetZone.Items.Add(DesktopItem.FromPath(path, targetZone.CategoryKey));
-            added++;
+            targetZone.Items.Add(DesktopItem.FromPath(destination, targetZone.CategoryKey));
+            mapped++;
         }
 
-        RenderZones();
-        RequestSave();
-        ShowStatus(added == 0 ? "没有可添加的文件" : $"已添加 {added} 个映射到“{targetZone.Name}”");
+        if (mapped > 0)
+        {
+            _iconService.Invalidate();
+            RenderZones();
+            RequestSave();
+        }
+
+        var message = moved == 0
+            ? mapped == 0
+                ? "没有可移动的文件"
+                : $"已添加 {mapped} 个桌面映射到“{targetZone.Name}”"
+            : skipped == 0
+                ? $"已将 {moved} 个项目移动到桌面并映射到“{targetZone.Name}”"
+                : $"已移动 {moved} 个项目，{skipped} 个项目跳过";
+        ShowStatus(message);
     }
 
     private void MoveFilesIntoFolder(DesktopItem targetFolder, IReadOnlyList<string> paths)
