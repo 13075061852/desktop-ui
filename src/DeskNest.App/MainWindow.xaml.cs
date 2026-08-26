@@ -1116,16 +1116,6 @@ public partial class MainWindow : System.Windows.Window
 
     private void DeleteZone(ZoneModel zone)
     {
-        var result = System.Windows.MessageBox.Show(
-            $"删除分区“{zone.Name}”？\n\n只会移除 {zone.Items.Count} 个映射，不会删除真实文件。",
-            "删除分区",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Question);
-        if (result != MessageBoxResult.Yes)
-        {
-            return;
-        }
-
         _state.Zones.Remove(zone);
         RenderZones();
         RequestSave();
