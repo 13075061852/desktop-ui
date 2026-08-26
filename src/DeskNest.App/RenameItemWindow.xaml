@@ -120,9 +120,6 @@
         <Border Background="{StaticResource DialogSurfaceBrush}"
                 BorderBrush="{StaticResource DialogStrokeBrush}" BorderThickness="1"
                 CornerRadius="14">
-            <Border.Effect>
-                <DropShadowEffect BlurRadius="28" ShadowDepth="8" Opacity="0.38" Color="#05080D" />
-            </Border.Effect>
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="50" />
