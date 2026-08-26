@@ -11,24 +11,6 @@
         Width="1600" Height="900"
         Left="0" Top="0">
     <Grid Background="{x:Null}">
-        <Image x:Name="WallpaperOutgoingImage"
-               Stretch="UniformToFill"
-               HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
-               IsHitTestVisible="False" Opacity="0" Visibility="Collapsed"
-               RenderOptions.BitmapScalingMode="LowQuality">
-            <Image.CacheMode>
-                <BitmapCache EnableClearType="False" RenderAtScale="1" />
-            </Image.CacheMode>
-        </Image>
-        <Image x:Name="WallpaperTransitionImage"
-               Stretch="UniformToFill"
-               HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
-               IsHitTestVisible="False" Opacity="0" Visibility="Collapsed"
-               RenderOptions.BitmapScalingMode="LowQuality">
-            <Image.CacheMode>
-                <BitmapCache EnableClearType="False" RenderAtScale="1" />
-            </Image.CacheMode>
-        </Image>
         <Canvas x:Name="DesktopCanvas" Background="{x:Null}" />
         <Canvas x:Name="AlignmentGuideCanvas" IsHitTestVisible="False">
             <Line x:Name="VerticalAlignmentGuide" Visibility="Collapsed"
