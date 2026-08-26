@@ -455,6 +455,7 @@ public partial class MainWindow : System.Windows.Window
             card.NewFolderRequested += (_, _) => CreateFolderInZone(zone);
             card.NewShortcutRequested += (_, _) => CreateShortcutInZone(zone);
             card.FilesDropped += (_, args) => AddPathsToZone(zone, args.Paths);
+            card.FolderFilesDropped += (_, args) => MoveFilesIntoFolder(args.Folder, args.Paths);
             card.ItemMoveRequested += (_, args) => MoveItem(zone, args.Payload, args.TargetIndex);
             card.ItemSelected += (_, args) => SelectItem(card, zone, args.Item);
             card.SelectionClearRequested += (_, _) => ClearItemSelection();
@@ -945,6 +946,123 @@ public partial class MainWindow : System.Windows.Window
         RenderZones();
         RequestSave();
         ShowStatus(added == 0 ? "没有可添加的文件" : $"已添加 {added} 个映射到“{targetZone.Name}”");
+    }
+
+    private void MoveFilesIntoFolder(DesktopItem targetFolder, IReadOnlyList<string> paths)
+    {
+        var targetDirectory = Path.GetFullPath(targetFolder.Path);
+        if (!Directory.Exists(targetDirectory))
+        {
+            ShowStatus("目标文件夹不可用");
+            return;
+        }
+
+        var moved = 0;
+        var skipped = 0;
+        foreach (var sourcePath in paths.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!File.Exists(sourcePath) && !Directory.Exists(sourcePath))
+            {
+                skipped++;
+                continue;
+            }
+
+            string source;
+            try
+            {
+                source = Path.GetFullPath(sourcePath);
+            }
+            catch (Exception) when (sourcePath.StartsWith("shell:", StringComparison.OrdinalIgnoreCase))
+            {
+                skipped++;
+                continue;
+            }
+
+            if (string.Equals(source, targetDirectory, StringComparison.OrdinalIgnoreCase) ||
+                Directory.Exists(source) &&
+                (IsPathInside(targetDirectory, source) || IsPathInside(source, targetDirectory)))
+            {
+                skipped++;
+                continue;
+            }
+
+            var sourceParent = Path.GetDirectoryName(source);
+            if (string.Equals(sourceParent, targetDirectory, StringComparison.OrdinalIgnoreCase))
+            {
+                skipped++;
+                continue;
+            }
+
+            var sourceName = Path.GetFileName(source.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            if (string.IsNullOrWhiteSpace(sourceName))
+            {
+                skipped++;
+                continue;
+            }
+
+            var destination = File.Exists(source)
+                ? GetUniquePath(targetDirectory, Path.GetFileNameWithoutExtension(source), Path.GetExtension(source))
+                : GetUniquePath(targetDirectory, sourceName, string.Empty);
+
+            try
+            {
+                if (Directory.Exists(source))
+                {
+                    Directory.Move(source, destination);
+                }
+                else
+                {
+                    File.Move(source, destination);
+                }
+            }
+            catch (IOException)
+            {
+                skipped++;
+                continue;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                skipped++;
+                continue;
+            }
+
+            foreach (var zone in _state.Zones)
+            {
+                zone.Items.RemoveAll(item =>
+                    !DesktopItem.IsShellLocation(item.Path) &&
+                    string.Equals(Path.GetFullPath(item.Path), source, StringComparison.OrdinalIgnoreCase));
+            }
+
+            var targetZone = _state.Zones.FirstOrDefault(zone => zone.Items.Any(item => item.Id == targetFolder.Id));
+            if (targetZone is not null)
+            {
+                targetZone.Items.Add(DesktopItem.FromPath(destination, targetZone.CategoryKey));
+            }
+
+            moved++;
+        }
+
+        if (moved > 0)
+        {
+            _iconService.Invalidate();
+            RenderZones();
+            RequestSave();
+        }
+
+        ShowStatus(moved == 0
+            ? "没有文件被移动到目标文件夹"
+            : skipped == 0
+                ? $"已移动 {moved} 个项目到“{targetFolder.DisplayName}”"
+                : $"已移动 {moved} 个项目，{skipped} 个项目跳过");
+    }
+
+    private static bool IsPathInside(string parent, string candidate)
+    {
+        var normalizedParent = Path.GetFullPath(parent)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var normalizedCandidate = Path.GetFullPath(candidate)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return normalizedCandidate.StartsWith(normalizedParent, StringComparison.OrdinalIgnoreCase);
     }
 
     private void MoveItem(ZoneModel targetZone, ItemDragPayload payload, int targetIndex)

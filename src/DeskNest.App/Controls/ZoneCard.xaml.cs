@@ -36,6 +36,13 @@ internal sealed class ItemMoveEventArgs(ItemDragPayload payload, int targetIndex
     public int TargetIndex { get; } = targetIndex;
 }
 
+internal sealed class FolderFilesDroppedEventArgs(DesktopItem folder, IReadOnlyList<string> paths) : EventArgs
+{
+    public DesktopItem Folder { get; } = folder;
+
+    public IReadOnlyList<string> Paths { get; } = paths;
+}
+
 public partial class ZoneCard : UserControl
 {
     public const string InternalItemFormat = "DeskNest.InternalDesktopItem";
@@ -104,6 +111,7 @@ public partial class ZoneCard : UserControl
     internal event EventHandler? NewFolderRequested;
     internal event EventHandler? NewShortcutRequested;
     internal event EventHandler<FilesDroppedEventArgs>? FilesDropped;
+    internal event EventHandler<FolderFilesDroppedEventArgs>? FolderFilesDropped;
     internal event EventHandler<ItemMoveEventArgs>? ItemMoveRequested;
     internal event EventHandler<ItemActionEventArgs>? ItemSelected;
     internal event EventHandler? SelectionClearRequested;
@@ -314,8 +322,15 @@ public partial class ZoneCard : UserControl
             Background = Brushes.Transparent,
             Child = content,
             Tag = item,
-            Cursor = Cursors.Hand
+            Cursor = Cursors.Hand,
+            AllowDrop = Directory.Exists(item.Path)
         };
+
+        if (border.AllowDrop)
+        {
+            border.DragOver += OnFolderDragOver;
+            border.Drop += OnFolderDrop;
+        }
 
         border.MouseEnter += (_, _) => ApplyItemSurfaceVisual(border, isHovered: true);
         border.MouseLeave += (_, _) => ApplyItemSurfaceVisual(border, isHovered: false);
@@ -1038,6 +1053,49 @@ public partial class ZoneCard : UserControl
         }
     }
 
+    private void OnFolderDragOver(object sender, DragEventArgs e)
+    {
+        var paths = GetFileDropPaths(e);
+        if (paths.Length == 0 || sender is not FrameworkElement { Tag: DesktopItem folder } ||
+            !Directory.Exists(folder.Path))
+        {
+            return;
+        }
+
+        e.Effects = DragDropEffects.Move;
+        e.Handled = true;
+    }
+
+    private void OnFolderDrop(object sender, DragEventArgs e)
+    {
+        var paths = GetFileDropPaths(e);
+        if (paths.Length == 0 || sender is not FrameworkElement { Tag: DesktopItem folder } ||
+            !Directory.Exists(folder.Path))
+        {
+            return;
+        }
+
+        FolderFilesDropped?.Invoke(this, new FolderFilesDroppedEventArgs(folder, paths));
+        e.Handled = true;
+    }
+
+    private static string[] GetFileDropPaths(DragEventArgs e)
+    {
+        if (e.Data.GetData(DataFormats.FileDrop) is string[] paths)
+        {
+            return paths.Where(path => File.Exists(path) || Directory.Exists(path)).ToArray();
+        }
+
+        if (e.Data.GetData(DataFormats.FileDrop) is StringCollection collection)
+        {
+            return collection.Cast<string>()
+                .Where(path => File.Exists(path) || Directory.Exists(path))
+                .ToArray();
+        }
+
+        return [];
+    }
+
     private void OnDragOver(object sender, DragEventArgs e)
     {
         var supportsDrop = e.Data.GetDataPresent(InternalItemFormat) || e.Data.GetDataPresent(DataFormats.FileDrop);
@@ -1445,9 +1503,10 @@ public partial class ZoneCard : UserControl
             return;
         }
 
-        if (e.Data.GetData(DataFormats.FileDrop) is string[] paths)
+        var paths = GetFileDropPaths(e);
+        if (paths.Length > 0)
         {
-            FilesDropped?.Invoke(this, new FilesDroppedEventArgs(paths.Where(path => File.Exists(path) || Directory.Exists(path)).ToArray()));
+            FilesDropped?.Invoke(this, new FilesDroppedEventArgs(paths));
             e.Handled = true;
         }
     }
