@@ -1,3 +1,4 @@
+using System.Collections.Specialized;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -903,12 +904,17 @@ public partial class ZoneCard : UserControl
         }
 
         var data = new DataObject(InternalItemFormat, new ItemDragPayload(Model.Id, item.Id));
+        if (File.Exists(item.Path) || Directory.Exists(item.Path))
+        {
+            data.SetFileDropList(new StringCollection { item.Path });
+        }
+
         SelectionClearRequested?.Invoke(this, EventArgs.Empty);
         StartDragPreview(item, (FrameworkElement)sender);
         GiveFeedback += OnItemDragGiveFeedback;
         try
         {
-            DragDrop.DoDragDrop(this, data, DragDropEffects.Move);
+            DragDrop.DoDragDrop(this, data, DragDropEffects.Copy | DragDropEffects.Move);
         }
         finally
         {
