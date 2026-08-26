@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using DeskNest.App.Controls;
 using DeskNest.App.Interop;
@@ -25,6 +26,7 @@ public partial class MainWindow : System.Windows.Window
     private readonly RuleClassifier _classifier = new();
     private readonly ShellIconService _iconService = new();
     private int _toolbarFlightVersion;
+    private bool? _appliedLightTheme;
     private readonly ShellService _shellService = new();
     private readonly DesktopHostService _desktopHost = new();
     private readonly DesktopIconVisibilityService _iconVisibility = new();
@@ -1591,13 +1593,24 @@ public partial class MainWindow : System.Windows.Window
         {
             ApplyToolbarAlignment();
         }
+
         var lightTheme = IsLightTheme();
+        var themeChanged = _appliedLightTheme is { } previousTheme && previousTheme != lightTheme;
+        if (themeChanged)
+        {
+            BeginThemeTransition();
+        }
+
         foreach (var card in DesktopCanvas.Children.OfType<ZoneCard>())
         {
             card.SetVisualOptions(_state.PanelOpacity, _state.IconSize, lightTheme);
         }
 
         ApplyThemeSurface(lightTheme);
+        if (themeChanged)
+        {
+            PlayThemeTransition();
+        }
     }
 
     private void ApplyThemeSurface(bool lightTheme)
@@ -1646,6 +1659,53 @@ public partial class MainWindow : System.Windows.Window
         System.Windows.Application.Current.Resources["MenuStrokeBrush"] = new SolidColorBrush(lightTheme
             ? Color.FromArgb(40, 30, 40, 54)
             : Color.FromArgb(63, 255, 255, 255));
+        _appliedLightTheme = lightTheme;
+    }
+
+    private void BeginThemeTransition()
+    {
+        if (!IsLoaded || ActualWidth <= 0 || ActualHeight <= 0)
+        {
+            return;
+        }
+
+        ThemeTransitionImage.BeginAnimation(OpacityProperty, null);
+        ThemeTransitionImage.Source = null;
+        ThemeTransitionImage.Visibility = Visibility.Collapsed;
+        UpdateLayout();
+
+        var snapshot = new RenderTargetBitmap(
+            Math.Max(1, (int)Math.Ceiling(ActualWidth)),
+            Math.Max(1, (int)Math.Ceiling(ActualHeight)),
+            96,
+            96,
+            PixelFormats.Pbgra32);
+        snapshot.Render(RootGrid);
+        ThemeTransitionImage.Source = snapshot;
+        ThemeTransitionImage.Opacity = 1;
+        ThemeTransitionImage.Visibility = Visibility.Visible;
+    }
+
+    private void PlayThemeTransition()
+    {
+        if (ThemeTransitionImage.Source is null)
+        {
+            return;
+        }
+
+        var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(260))
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+            FillBehavior = FillBehavior.Stop
+        };
+        fade.Completed += (_, _) =>
+        {
+            ThemeTransitionImage.BeginAnimation(OpacityProperty, null);
+            ThemeTransitionImage.Opacity = 0;
+            ThemeTransitionImage.Source = null;
+            ThemeTransitionImage.Visibility = Visibility.Collapsed;
+        };
+        ThemeTransitionImage.BeginAnimation(OpacityProperty, fade);
     }
 
     private bool IsLightTheme()

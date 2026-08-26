@@ -337,7 +337,7 @@
 
     <Border x:Name="RootBorder" Background="{DynamicResource SettingsSurfaceBrush}"
             BorderBrush="{DynamicResource SettingsStrokeBrush}" BorderThickness="1" CornerRadius="10">
-        <Grid>
+        <Grid x:Name="SettingsContentGrid">
             <Grid.RowDefinitions>
                 <RowDefinition Height="78" />
                 <RowDefinition Height="*" />
@@ -428,6 +428,9 @@
                     <Button Style="{StaticResource SettingsPrimaryButtonStyle}" Content="保存设置" Click="OnSaveClick" />
                 </StackPanel>
             </Grid>
+
+            <Image x:Name="ThemeTransitionImage" Grid.RowSpan="3" Stretch="Fill"
+                   IsHitTestVisible="False" Opacity="0" Visibility="Collapsed" Panel.ZIndex="100" />
         </Grid>
     </Border>
 </Window>

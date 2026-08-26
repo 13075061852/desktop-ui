@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using DeskNest.App.Services;
 using DeskNest.Core.Models;
@@ -26,6 +27,7 @@ public partial class SettingsWindow : System.Windows.Window
     private bool _settingsCommitted;
     private bool _wallpaperPreviewChanged;
     private bool _wallpaperRestoreQueued;
+    private bool? _appliedLightTheme;
 
     public SettingsWindow(
         AppState state,
@@ -99,11 +101,23 @@ public partial class SettingsWindow : System.Windows.Window
 
     private void PreviewCurrentAppearance(bool animateToolbar = false)
     {
+        var targetLightTheme = IsLightTheme(GetSelectedTheme());
+        var themeChanged = _appliedLightTheme is { } previousTheme && previousTheme != targetLightTheme;
+        if (themeChanged)
+        {
+            BeginThemeTransition();
+        }
+
         _state.Theme = GetSelectedTheme();
         _state.PanelOpacity = OpacitySlider.Value;
         _state.IconSize = IconSizeSlider.Value;
         _state.ToolbarAlignment = GetSelectedToolbarAlignment();
         ApplyWindowTheme();
+        if (themeChanged)
+        {
+            PlayThemeTransition();
+        }
+
         _previewAppearance?.Invoke(animateToolbar);
     }
 
@@ -142,6 +156,53 @@ public partial class SettingsWindow : System.Windows.Window
         Resources["SettingsStrokeBrush"] = Brush(isLight ? "#281E2836" : "#38FFFFFF");
         Resources["SettingsHoverBrush"] = Brush(isLight ? "#161E2836" : "#24FFFFFF");
         Resources["SettingsTrackBrush"] = Brush(isLight ? "#345B6878" : "#405B6878");
+        _appliedLightTheme = isLight;
+    }
+
+    private void BeginThemeTransition()
+    {
+        if (!IsLoaded || RootBorder.ActualWidth <= 0 || RootBorder.ActualHeight <= 0)
+        {
+            return;
+        }
+
+        ThemeTransitionImage.BeginAnimation(OpacityProperty, null);
+        ThemeTransitionImage.Source = null;
+        ThemeTransitionImage.Visibility = Visibility.Collapsed;
+        UpdateLayout();
+
+        var snapshot = new RenderTargetBitmap(
+            Math.Max(1, (int)Math.Ceiling(RootBorder.ActualWidth)),
+            Math.Max(1, (int)Math.Ceiling(RootBorder.ActualHeight)),
+            96,
+            96,
+            PixelFormats.Pbgra32);
+        snapshot.Render(RootBorder);
+        ThemeTransitionImage.Source = snapshot;
+        ThemeTransitionImage.Opacity = 1;
+        ThemeTransitionImage.Visibility = Visibility.Visible;
+    }
+
+    private void PlayThemeTransition()
+    {
+        if (ThemeTransitionImage.Source is null)
+        {
+            return;
+        }
+
+        var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(260))
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+            FillBehavior = FillBehavior.Stop
+        };
+        fade.Completed += (_, _) =>
+        {
+            ThemeTransitionImage.BeginAnimation(OpacityProperty, null);
+            ThemeTransitionImage.Opacity = 0;
+            ThemeTransitionImage.Source = null;
+            ThemeTransitionImage.Visibility = Visibility.Collapsed;
+        };
+        ThemeTransitionImage.BeginAnimation(OpacityProperty, fade);
     }
 
     private static bool IsLightTheme(string theme)
