@@ -1033,12 +1033,8 @@ public partial class MainWindow : System.Windows.Window
                     string.Equals(Path.GetFullPath(item.Path), source, StringComparison.OrdinalIgnoreCase));
             }
 
-            var targetZone = _state.Zones.FirstOrDefault(zone => zone.Items.Any(item => item.Id == targetFolder.Id));
-            if (targetZone is not null)
-            {
-                targetZone.Items.Add(DesktopItem.FromPath(destination, targetZone.CategoryKey));
-            }
-
+            // The item now lives inside the mapped folder, so it should not remain as a
+            // separate desktop mapping in any zone.
             moved++;
         }
 
