@@ -25,7 +25,9 @@ if (-not ($runtimes -match 'Microsoft\.WindowsDesktop\.App 8\.')) {
 
 Get-Process 'DeskNest.App' -ErrorAction SilentlyContinue | Stop-Process -Force
 New-Item -ItemType Directory -Path $target -Force | Out-Null
-Get-ChildItem $source -File | Where-Object Name -ne 'install-user.ps1' | Copy-Item -Destination $target -Force
+Get-ChildItem $source -Force |
+    Where-Object Name -ne 'install-user.ps1' |
+    Copy-Item -Destination $target -Recurse -Force
 Copy-Item (Join-Path $source 'install-user.ps1') $target -Force
 
 $wsh = New-Object -ComObject WScript.Shell
