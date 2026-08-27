@@ -466,6 +466,7 @@ public partial class MainWindow : System.Windows.Window
             card.FilesDropped += (_, args) => AddPathsToZone(zone, args.Paths);
             card.FolderFilesDropped += (_, args) => MoveFilesIntoFolder(args.Folder, args.Paths);
             card.ItemMoveRequested += (_, args) => MoveItem(zone, args.Payload, args.TargetIndex);
+            card.ItemDragCompleted += (_, args) => HandleItemDragCompleted(args);
             card.ItemSelected += (_, args) => SelectItem(card, zone, args.Item);
             card.SelectionClearRequested += (_, _) => ClearItemSelection();
             card.ItemOpenRequested += (_, args) => OpenItem(args.Item);
@@ -1246,6 +1247,35 @@ public partial class MainWindow : System.Windows.Window
         var normalizedCandidate = Path.GetFullPath(candidate)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
         return normalizedCandidate.StartsWith(normalizedParent, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void HandleItemDragCompleted(ItemDragCompletedEventArgs args)
+    {
+        if ((args.Effects & DragDropEffects.Move) == 0 ||
+            DesktopItem.IsShellLocation(args.Path) ||
+            File.Exists(args.Path) ||
+            Directory.Exists(args.Path))
+        {
+            return;
+        }
+
+        var removed = 0;
+        foreach (var zone in _state.Zones)
+        {
+            removed += zone.Items.RemoveAll(item =>
+                !DesktopItem.IsShellLocation(item.Path) &&
+                string.Equals(item.Path, args.Path, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (removed == 0)
+        {
+            return;
+        }
+
+        ClearItemSelection();
+        RenderZones();
+        RequestSave();
+        ShowStatus("已立即移除拖走的文件映射");
     }
 
     private void MoveItem(ZoneModel targetZone, ItemDragPayload payload, int targetIndex)

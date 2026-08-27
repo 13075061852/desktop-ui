@@ -36,6 +36,13 @@ internal sealed class ItemMoveEventArgs(ItemDragPayload payload, int targetIndex
     public int TargetIndex { get; } = targetIndex;
 }
 
+internal sealed class ItemDragCompletedEventArgs(string path, DragDropEffects effects) : EventArgs
+{
+    public string Path { get; } = path;
+
+    public DragDropEffects Effects { get; } = effects;
+}
+
 internal sealed class FolderFilesDroppedEventArgs(DesktopItem folder, IReadOnlyList<string> paths) : EventArgs
 {
     public DesktopItem Folder { get; } = folder;
@@ -114,6 +121,7 @@ public partial class ZoneCard : UserControl
     internal event EventHandler<FilesDroppedEventArgs>? FilesDropped;
     internal event EventHandler<FolderFilesDroppedEventArgs>? FolderFilesDropped;
     internal event EventHandler<ItemMoveEventArgs>? ItemMoveRequested;
+    internal event EventHandler<ItemDragCompletedEventArgs>? ItemDragCompleted;
     internal event EventHandler<ItemActionEventArgs>? ItemSelected;
     internal event EventHandler? SelectionClearRequested;
     internal event EventHandler<ItemActionEventArgs>? ItemOpenRequested;
@@ -928,9 +936,10 @@ public partial class ZoneCard : UserControl
         SelectionClearRequested?.Invoke(this, EventArgs.Empty);
         StartDragPreview(item, (FrameworkElement)sender);
         GiveFeedback += OnItemDragGiveFeedback;
+        var effects = DragDropEffects.None;
         try
         {
-            DragDrop.DoDragDrop(this, data, DragDropEffects.Copy | DragDropEffects.Move);
+            effects = DragDrop.DoDragDrop(this, data, DragDropEffects.Copy | DragDropEffects.Move);
         }
         finally
         {
@@ -939,6 +948,8 @@ public partial class ZoneCard : UserControl
             HideDropIndicator();
             DragPreviewEnded?.Invoke();
         }
+
+        ItemDragCompleted?.Invoke(this, new ItemDragCompletedEventArgs(item.Path, effects));
     }
 
     private void StartDragPreview(DesktopItem item, FrameworkElement sourceElement)
