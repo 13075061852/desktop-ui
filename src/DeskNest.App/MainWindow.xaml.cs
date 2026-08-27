@@ -370,7 +370,8 @@ public partial class MainWindow : System.Windows.Window
         var isFirstRun = !File.Exists(_stateStore.StatePath);
         _state = await _stateStore.LoadAsync();
         var startupConfigured = _startupService.Apply(_state.LaunchAtStartup);
-        var shellItemsAdded = EnsureSystemShellItems();
+        var staleMappingsRemoved = RemoveMissingMappings();
+        var shellItemsChanged = EnsureSystemShellItems();
         var desktopMappingsAdded = AddUnmappedDesktopItems();
         if (!string.IsNullOrWhiteSpace(_state.WallpaperSelection))
         {
@@ -409,7 +410,7 @@ public partial class MainWindow : System.Windows.Window
         {
             _iconVisibility.SetVisible(false);
         }
-        if (layoutAdjusted || shellItemsAdded || desktopMappingsAdded > 0)
+        if (layoutAdjusted || shellItemsChanged || desktopMappingsAdded > 0 || staleMappingsRemoved > 0)
         {
             RequestSave();
         }
@@ -821,6 +822,20 @@ public partial class MainWindow : System.Windows.Window
         }
 
         return added;
+    }
+
+    private int RemoveMissingMappings()
+    {
+        var removed = 0;
+        foreach (var zone in _state.Zones)
+        {
+            removed += zone.Items.RemoveAll(item =>
+                !DesktopItem.IsShellLocation(item.Path) &&
+                !File.Exists(item.Path) &&
+                !Directory.Exists(item.Path));
+        }
+
+        return removed;
     }
 
     private void OrganizeDesktop(bool showNotification)
@@ -1366,7 +1381,10 @@ public partial class MainWindow : System.Windows.Window
     {
         if (!item.Exists)
         {
-            ShowStatus("无法删除：文件可能已被移动或删除");
+            zone.Items.Remove(item);
+            RefreshZone(zone);
+            RequestSave();
+            ShowStatus("已清理失效映射");
             return;
         }
 
@@ -1498,11 +1516,14 @@ public partial class MainWindow : System.Windows.Window
     {
         _iconService.Invalidate();
         var added = AddUnmappedDesktopItems();
-        if (added > 0)
+        var removed = RemoveMissingMappings();
+        if (added > 0 || removed > 0)
         {
             RenderZones();
             RequestSave();
-            ShowStatus($"已自动映射 {added} 个桌面项目");
+            ShowStatus(added > 0
+                ? $"已自动映射 {added} 个桌面项目"
+                : $"已清理 {removed} 个失效映射");
             return;
         }
 
