@@ -370,227 +370,67 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Moves a side-by-side pair along the horizontal axis. <paramref name="offset"/>
-    /// is the absolute pointer travel since the drag started (positive = right).
-    /// The line first squeezes the neighbour it moves into down to the minimum,
-    /// then translates the whole pair until an edge or another zone blocks it.
+    /// Redistributes the horizontal space of a side-by-side pair. The pair's
+    /// outer edges stay anchored (left edge of the left zone, right edge of
+    /// the right zone); dragging the line only moves the split point, so one
+    /// zone grows exactly as much as the other shrinks. The line clamps at
+    /// the pair's minimum sizes.
     /// </summary>
     private void MoveSideBySidePair(SplitterDragState drag, double offset)
     {
         var first = drag.FirstStart;
         var second = drag.SecondStart;
-        var newSecondX = second.X;
-        var secondWidth = second.Width;
-        var newFirstX = first.X;
-        var newFirstWidth = first.Width;
 
-        if (offset >= 0)
+        var midGapStart = second.X - drag.Gap / 2;
+        var anchorLeft = first.X;
+        var anchorRight = second.Right;
+
+        var minMid = anchorLeft + SplitterMinimumWidth + drag.Gap / 2;
+        var maxMid = anchorRight - SplitterMinimumWidth - drag.Gap / 2;
+        var mid = Math.Clamp(midGapStart + offset, minMid, maxMid);
+
+        var newFirstWidth = mid - drag.Gap / 2 - anchorLeft;
+        var newSecondX = mid + drag.Gap / 2;
+        var newSecondWidth = anchorRight - newSecondX;
+
+        if (newFirstWidth.ApproximatelyEquals(first.Width) &&
+            newSecondWidth.ApproximatelyEquals(second.Width))
         {
-            // Line moves right: shrink the right-hand zone first, then translate.
-            var squeeze = Math.Min(offset, Math.Max(0, second.Width - SplitterMinimumWidth));
-            var interimX = second.X + squeeze;
-            var interimWidth = second.Right - interimX;
-
-            var shift = offset - squeeze;
-            if (shift > 0)
-            {
-                var ceiling = ComputeRightTranslateLimit(drag, interimWidth);
-                shift = Math.Max(0, Math.Min(shift, ceiling - interimX));
-                interimX += shift;
-            }
-
-            newSecondX = interimX;
-            secondWidth = interimWidth;
-            newFirstWidth = newSecondX - drag.Gap - first.X;
-            if (newSecondX.ApproximatelyEquals(second.X) && newFirstWidth.ApproximatelyEquals(first.Width))
-            {
-                return;
-            }
-        }
-        else
-        {
-            // Line moves left: shrink the left-hand zone first, then translate.
-            var total = -offset;
-            var squeeze = Math.Min(total, Math.Max(0, first.Width - SplitterMinimumWidth));
-            var interimWidth = Math.Max(SplitterMinimumWidth, first.Width - squeeze);
-
-            var shift = total - squeeze;
-            if (shift > 0)
-            {
-                var floor = ComputeLeftTranslateFloor(drag);
-                shift = Math.Max(0, Math.Min(shift, first.X - floor));
-                newFirstX = first.X - shift;
-            }
-
-            newFirstWidth = interimWidth;
-            newSecondX = newFirstX + newFirstWidth + drag.Gap;
-            if (newFirstX.ApproximatelyEquals(first.X) && newFirstWidth.ApproximatelyEquals(first.Width))
-            {
-                return;
-            }
+            return;
         }
 
-        ApplyZoneVisualBounds(drag.Second, new ZoneBounds(newSecondX, second.Y, secondWidth, second.Height));
-        ApplyZoneVisualBounds(drag.First, new ZoneBounds(newFirstX, first.Y, newFirstWidth, first.Height));
+        ApplyZoneVisualBounds(drag.First, new ZoneBounds(anchorLeft, first.Y, newFirstWidth, first.Height));
+        ApplyZoneVisualBounds(drag.Second, new ZoneBounds(newSecondX, second.Y, newSecondWidth, second.Height));
     }
 
-    /// <summary>Moves a stacked pair along the vertical axis; same contract as
-    /// <see cref="MoveSideBySidePair"/> with positive offsets meaning downward.</summary>
+    /// <summary>Redistributes the vertical space of a stacked pair; same contract
+    /// as <see cref="MoveSideBySidePair"/> with the top and bottom edges anchored.</summary>
     private void MoveStackedPair(SplitterDragState drag, double offset)
     {
         var first = drag.FirstStart;
         var second = drag.SecondStart;
-        const double minimumY = 72;
-        var maximumBottom = Math.Max(minimumY + 1, ActualHeight);
-        var newSecondY = second.Y;
-        var secondHeight = second.Height;
-        var newFirstY = first.Y;
-        var newFirstHeight = first.Height;
 
-        if (offset >= 0)
+        var midGapStart = second.Y - drag.Gap / 2;
+        var anchorTop = first.Y;
+        var anchorBottom = second.Bottom;
+
+        var minMid = anchorTop + SplitterMinimumHeight + drag.Gap / 2;
+        var maxMid = anchorBottom - SplitterMinimumHeight - drag.Gap / 2;
+        var mid = Math.Clamp(midGapStart + offset, minMid, maxMid);
+
+        var newFirstHeight = mid - drag.Gap / 2 - anchorTop;
+        var newSecondY = mid + drag.Gap / 2;
+        var newSecondHeight = anchorBottom - newSecondY;
+
+        if (newFirstHeight.ApproximatelyEquals(first.Height) &&
+            newSecondHeight.ApproximatelyEquals(second.Height))
         {
-            // Line moves down: shrink the bottom zone first, then translate.
-            var squeeze = Math.Min(offset, Math.Max(0, second.Height - SplitterMinimumHeight));
-            var interimY = second.Y + squeeze;
-            var interimHeight = second.Bottom - interimY;
-
-            var shift = offset - squeeze;
-            if (shift > 0)
-            {
-                var ceiling = ComputeDownTranslateLimit(drag, interimHeight, maximumBottom);
-                shift = Math.Max(0, Math.Min(shift, ceiling - interimY));
-                interimY += shift;
-            }
-
-            newSecondY = interimY;
-            secondHeight = interimHeight;
-            newFirstHeight = newSecondY - drag.Gap - first.Y;
-            if (newSecondY.ApproximatelyEquals(second.Y) && newFirstHeight.ApproximatelyEquals(first.Height))
-            {
-                return;
-            }
-        }
-        else
-        {
-            // Line moves up: shrink the top zone first, then translate.
-            var total = -offset;
-            var squeeze = Math.Min(total, Math.Max(0, first.Height - SplitterMinimumHeight));
-            var interimHeight = Math.Max(SplitterMinimumHeight, first.Height - squeeze);
-
-            var shift = total - squeeze;
-            if (shift > 0)
-            {
-                var floor = ComputeUpTranslateFloor(drag);
-                shift = Math.Max(0, Math.Min(shift, first.Y - floor));
-                newFirstY = first.Y - shift;
-            }
-
-            newFirstHeight = interimHeight;
-            newSecondY = newFirstY + newFirstHeight + drag.Gap;
-            if (newFirstY.ApproximatelyEquals(first.Y) && newFirstHeight.ApproximatelyEquals(first.Height))
-            {
-                return;
-            }
+            return;
         }
 
-        ApplyZoneVisualBounds(drag.Second, new ZoneBounds(second.X, newSecondY, second.Width, secondHeight));
-        ApplyZoneVisualBounds(drag.First, new ZoneBounds(first.X, newFirstY, first.Width, newFirstHeight));
+        ApplyZoneVisualBounds(drag.First, new ZoneBounds(first.X, anchorTop, first.Width, newFirstHeight));
+        ApplyZoneVisualBounds(drag.Second, new ZoneBounds(second.X, newSecondY, second.Width, newSecondHeight));
     }
-
-    private double ComputeRightTranslateLimit(SplitterDragState drag, double secondaryWidth)
-    {
-        var limit = Math.Max(ZoneCard.HorizontalDesktopInset + 1, ActualWidth - ZoneCard.HorizontalDesktopInset)
-                    - secondaryWidth;
-        var top = Math.Max(drag.FirstStart.Y, drag.SecondStart.Y);
-        var bottom = Math.Min(drag.FirstStart.Bottom, drag.SecondStart.Bottom);
-        foreach (var other in _state.Zones)
-        {
-            if (other.Id == drag.First.Id || other.Id == drag.Second.Id)
-            {
-                continue;
-            }
-
-            var bounds = GetVisualBounds(other);
-            if (Math.Min(bounds.Bottom, bottom) - Math.Max(bounds.Y, top) > 12)
-            {
-                limit = Math.Min(limit, bounds.X - 12 - secondaryWidth);
-            }
-        }
-
-        return Math.Max(drag.SecondStart.X, limit);
-    }
-
-    private double ComputeLeftTranslateFloor(SplitterDragState drag)
-    {
-        var floor = ZoneCard.HorizontalDesktopInset;
-        var top = Math.Max(drag.FirstStart.Y, drag.SecondStart.Y);
-        var bottom = Math.Min(drag.FirstStart.Bottom, drag.SecondStart.Bottom);
-        foreach (var other in _state.Zones)
-        {
-            if (other.Id == drag.First.Id || other.Id == drag.Second.Id)
-            {
-                continue;
-            }
-
-            var bounds = GetVisualBounds(other);
-            if (Math.Min(bounds.Bottom, bottom) - Math.Max(bounds.Y, top) > 12)
-            {
-                floor = Math.Max(floor, bounds.Right + 12);
-            }
-        }
-
-        return Math.Min(floor, drag.FirstStart.X);
-    }
-
-    private double ComputeDownTranslateLimit(
-        SplitterDragState drag,
-        double secondaryHeight,
-        double maximumBottom)
-    {
-        var limit = maximumBottom - secondaryHeight;
-        var left = Math.Max(drag.FirstStart.X, drag.SecondStart.X);
-        var right = Math.Min(drag.FirstStart.Right, drag.SecondStart.Right);
-        foreach (var other in _state.Zones)
-        {
-            if (other.Id == drag.First.Id || other.Id == drag.Second.Id)
-            {
-                continue;
-            }
-
-            var bounds = GetVisualBounds(other);
-            if (Math.Min(bounds.Right, right) - Math.Max(bounds.X, left) > 12)
-            {
-                limit = Math.Min(limit, bounds.Y - 12 - secondaryHeight);
-            }
-        }
-
-        return Math.Max(drag.SecondStart.Y, limit);
-    }
-
-    private double ComputeUpTranslateFloor(SplitterDragState drag)
-    {
-        const double minimumY = 72;
-        var floor = minimumY;
-        var left = Math.Max(drag.FirstStart.X, drag.SecondStart.X);
-        var right = Math.Min(drag.FirstStart.Right, drag.SecondStart.Right);
-        foreach (var other in _state.Zones)
-        {
-            if (other.Id == drag.First.Id || other.Id == drag.Second.Id)
-            {
-                continue;
-            }
-
-            var bounds = GetVisualBounds(other);
-            if (Math.Min(bounds.Right, right) - Math.Max(bounds.X, left) > 12)
-            {
-                floor = Math.Max(floor, bounds.Bottom + 12);
-            }
-        }
-
-        return Math.Min(floor, drag.FirstStart.Y);
-    }
-
-
 
     private void ApplyZoneVisualBounds(ZoneModel zone, ZoneBounds bounds)
     {
