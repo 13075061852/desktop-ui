@@ -8,10 +8,15 @@ internal static class NativeMethods
     internal const uint SpiGetDesktopWallpaper = 0x0073;
     internal const uint SpiSetDesktopWallpaper = 0x0014;
     internal const uint ShcneUpdatedir = 0x00001000;
+    internal const uint ShcneAssocChanged = 0x08000000;
+    internal const uint ShcnfIdList = 0x0000;
     internal const uint ShcnfPathW = 0x0005;
     internal const uint SpifUpdateIniFile = 0x0001;
     internal const uint SpifSendChange = 0x0002;
     internal const int WmActivateApp = 0x001C;
+    internal const int WmShowWindow = 0x0018;
+    internal const int WmSize = 0x0005;
+    internal const int SizeMinimized = 1;
     internal const int WmNcHitTest = 0x0084;
     internal const int WmHotKey = 0x0312;
     internal const int HtTransparent = -1;

@@ -32,6 +32,22 @@ internal sealed class ShellNewService
         ".xlsx"
     ];
 
+    private static readonly string[] SafeFileExtensions =
+    [
+        ".accdb",
+        ".bmp",
+        ".doc",
+        ".docx",
+        ".mdb",
+        ".pub",
+        ".ppt",
+        ".pptx",
+        ".rtf",
+        ".txt",
+        ".xls",
+        ".xlsx"
+    ];
+
     private static readonly ShellNewDefinition[] FallbackDefinitions =
     [
         new(".accdb", ".accdb", "Microsoft Access Database", null, null, null),
@@ -65,6 +81,56 @@ internal sealed class ShellNewService
         }
 
         return definitions;
+    }
+
+    public bool EnsureSystemShellNewOverrides()
+    {
+        var command = BuildSafeShellNewCommand();
+        var changed = false;
+        foreach (var extension in SafeFileExtensions)
+        {
+            try
+            {
+                using var registeredExtension = Registry.ClassesRoot.OpenSubKey(extension);
+                var className = registeredExtension?.GetValue(string.Empty) as string;
+                using var userShellNew = Registry.CurrentUser.CreateSubKey(
+                    $@"Software\Classes\{extension}\ShellNew");
+                if (userShellNew is null)
+                {
+                    continue;
+                }
+
+                if (string.Equals(extension, ".rtf", StringComparison.OrdinalIgnoreCase))
+                {
+                    userShellNew.SetValue("Data", "{\\rtf1}", RegistryValueKind.String);
+                    userShellNew.DeleteValue("Command", throwOnMissingValue: false);
+                }
+                else
+                {
+                    userShellNew.SetValue("Command", command, RegistryValueKind.String);
+                    userShellNew.DeleteValue("NullFile", throwOnMissingValue: false);
+                }
+
+                // Several applications register New under the ProgID instead of the
+                // extension. Override that command as well, while leaving the inherited
+                // display name and file association untouched.
+                if (!string.IsNullOrWhiteSpace(className))
+                {
+                    using var userCommand = Registry.CurrentUser.CreateSubKey(
+                        $@"Software\Classes\{className}\shell\New\command");
+                    userCommand?.SetValue(string.Empty, command, RegistryValueKind.String);
+                }
+
+                changed = true;
+            }
+            catch (Exception)
+            {
+                // HKCU is normally writable, but a locked-down account should not prevent
+                // DeskNest from starting or displaying the desktop.
+            }
+        }
+
+        return changed;
     }
 
     public bool CreateFile(ShellNewDefinition definition, string path)
@@ -193,5 +259,16 @@ internal sealed class ShellNewService
         return string.IsNullOrWhiteSpace(path)
             ? null
             : Environment.ExpandEnvironmentVariables(path);
+    }
+
+    private static string BuildSafeShellNewCommand()
+    {
+        var commandProcessor = Environment.GetEnvironmentVariable("ComSpec");
+        if (string.IsNullOrWhiteSpace(commandProcessor))
+        {
+            commandProcessor = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+        }
+
+        return $"\"{commandProcessor}\" /d /c copy /b NUL \"%1\" >NUL 2>&1";
     }
 }

@@ -73,6 +73,7 @@ public partial class MainWindow : System.Windows.Window
         _menuDismissTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(45) };
         _menuDismissTimer.Tick += (_, _) =>
         {
+            EnsureCustomDesktopWindowVisible();
             DismissTransientMenusOnOutsidePointerDown();
             DismissSelectionOnContextChange();
         };
@@ -114,19 +115,29 @@ public partial class MainWindow : System.Windows.Window
             return 0;
         }
 
+        if ((message == NativeMethods.WmShowWindow && wParam == 0 ||
+             message == NativeMethods.WmSize && wParam.ToInt32() == NativeMethods.SizeMinimized) &&
+            _state.DesktopIconsHidden &&
+            !_exitRequested)
+        {
+            Dispatcher.BeginInvoke(
+                DispatcherPriority.ApplicationIdle,
+                new Action(EnsureCustomDesktopWindowVisible));
+        }
+
         if (message != NativeMethods.WmNcHitTest)
         {
             return 0;
         }
 
         var packedPoint = lParam.ToInt64();
-        var screenPoint = new Point(
+        var screenHitPoint = new Point(
             unchecked((short)(packedPoint & 0xFFFF)),
             unchecked((short)((packedPoint >> 16) & 0xFFFF)));
-        var clientPoint = PointFromScreen(screenPoint);
+        var clientHitPoint = PointFromScreen(screenHitPoint);
 
         handled = true;
-        return IsInteractivePoint(clientPoint)
+        return IsInteractivePoint(clientHitPoint)
             ? NativeMethods.HtClient
             : NativeMethods.HtTransparent;
     }
@@ -349,65 +360,6 @@ public partial class MainWindow : System.Windows.Window
             .Any(card => ContainsPoint(card, point));
     }
 
-    private void OnDesktopPreviewRightButtonUp(object sender, MouseButtonEventArgs e)
-    {
-        if (!_state.DesktopIconsHidden)
-        {
-            return;
-        }
-
-        var point = e.GetPosition(this);
-        if (ContainsPoint(ToolbarBorder, point) ||
-            DesktopCanvas.Children.OfType<ZoneCard>().Any(card => ContainsPoint(card, point)))
-        {
-            return;
-        }
-
-        var menu = new ContextMenu
-        {
-            Placement = PlacementMode.MousePoint,
-            StaysOpen = false
-        };
-        menu.Items.Add(BuildDesktopNewMenu());
-        menu.IsOpen = true;
-        e.Handled = true;
-    }
-
-    private MenuItem BuildDesktopNewMenu()
-    {
-        var newMenu = new MenuItem { Header = "新建" };
-        var newFolder = new MenuItem { Header = "文件夹" };
-        newFolder.Click += (_, _) => CreateInDesktopContext("folders", CreateFolderInZone);
-        var newShortcut = new MenuItem { Header = "快捷方式" };
-        newShortcut.Click += (_, _) => CreateInDesktopContext("apps", CreateShortcutInZone);
-        newMenu.Items.Add(newFolder);
-        newMenu.Items.Add(newShortcut);
-        newMenu.Items.Add(new Separator());
-
-        foreach (var definition in _shellNewService.GetDefinitions())
-        {
-            var templateMenuItem = new MenuItem { Header = definition.DisplayName };
-            templateMenuItem.Click += (_, _) => CreateShellNewFile(definition);
-            newMenu.Items.Add(templateMenuItem);
-        }
-
-        return newMenu;
-    }
-
-    private void CreateInDesktopContext(string categoryKey, Action<ZoneModel> createAction)
-    {
-        var targetZone = _state.Zones.FirstOrDefault(zone => zone.CategoryKey == categoryKey)
-                         ?? _state.Zones.FirstOrDefault(zone => zone.CategoryKey == "other")
-                         ?? _state.Zones.FirstOrDefault();
-        if (targetZone is null)
-        {
-            ShowStatus("没有可用的分区");
-            return;
-        }
-
-        createAction(targetZone);
-    }
-
     private void CreateShellNewFile(ShellNewDefinition definition, ZoneModel? requestedZone = null)
     {
         var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
@@ -482,6 +434,15 @@ public partial class MainWindow : System.Windows.Window
         _loaded = true;
         var isFirstRun = !File.Exists(_stateStore.StatePath);
         _state = await _stateStore.LoadAsync();
+        if (_shellNewService.EnsureSystemShellNewOverrides())
+        {
+            NativeMethods.SHChangeNotify(
+                NativeMethods.ShcneAssocChanged,
+                NativeMethods.ShcnfIdList,
+                null,
+                0);
+        }
+
         var startupConfigured = _startupService.Apply(_state.LaunchAtStartup);
         var staleMappingsRemoved = RemoveMissingMappings();
         var shellItemsChanged = EnsureSystemShellItems();
@@ -1784,6 +1745,9 @@ public partial class MainWindow : System.Windows.Window
     {
         ApplyToolbarAlignment();
         var customMode = _state.DesktopIconsHidden;
+        // Keep the desktop surface truly transparent so Explorer owns the native blank-area
+        // context menu in both desktop modes.
+        RootGrid.Background = Brushes.Transparent;
         LockButtonText.Text = _state.LayoutLocked ? "解锁布局" : "锁定布局";
         LockButtonIcon.Data = Geometry.Parse(_state.LayoutLocked
             ? "M 2,5 L 10,5 L 10,12 L 2,12 Z M 3,5 L 3,3.5 C 3,1.5 4.5,1 6,1 C 7.5,1 9,2 9,3.5"
@@ -2331,6 +2295,37 @@ public partial class MainWindow : System.Windows.Window
         _desktopHost.Reattach(this);
         _desktopHost.ResizeToVirtualScreen();
         ShowStatus("栖格正在桌面运行");
+    }
+
+    private void EnsureCustomDesktopWindowVisible()
+    {
+        if (!_loaded || !_state.DesktopIconsHidden || _exitRequested || _mainWindowHandle == 0 ||
+            NativeMethods.IsWindowVisible(_mainWindowHandle))
+        {
+            return;
+        }
+
+        try
+        {
+            if (WindowState == WindowState.Minimized)
+            {
+                WindowState = WindowState.Normal;
+            }
+
+            if (!IsVisible)
+            {
+                Show();
+            }
+
+            _desktopHost.Reattach(this);
+            _desktopHost.ResizeToVirtualScreen();
+            _iconVisibility.SetVisible(false);
+            UpdateToolbarState();
+        }
+        catch (InvalidOperationException)
+        {
+            // The window may be in the middle of a shell transition; the next timer tick retries.
+        }
     }
 
     private void ExitApplication()
