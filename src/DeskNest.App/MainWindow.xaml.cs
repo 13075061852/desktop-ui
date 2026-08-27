@@ -839,6 +839,44 @@ public partial class MainWindow : System.Windows.Window
         return removed;
     }
 
+    private int RemoveMappingsForMovedPath(string sourcePath, bool isDirectory)
+    {
+        var removed = 0;
+        foreach (var zone in _state.Zones)
+        {
+            removed += zone.Items.RemoveAll(item =>
+                !DesktopItem.IsShellLocation(item.Path) &&
+                (PathsEqual(item.Path, sourcePath) ||
+                 isDirectory && IsPathInside(sourcePath, item.Path)));
+        }
+
+        return removed;
+    }
+
+    private static bool PathsEqual(string left, string right)
+    {
+        try
+        {
+            return string.Equals(
+                NormalizePathForComparison(left),
+                NormalizePathForComparison(right),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch (ArgumentException)
+        {
+            return string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    private static string NormalizePathForComparison(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(fullPath);
+        return string.Equals(fullPath, root, StringComparison.OrdinalIgnoreCase)
+            ? fullPath
+            : fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    }
+
     private void OrganizeDesktop(bool showNotification)
     {
         var added = AddUnmappedDesktopItems();
@@ -1074,11 +1112,11 @@ public partial class MainWindow : System.Windows.Window
                 Path.DirectorySeparatorChar,
                 Path.AltDirectorySeparatorChar);
             var destination = source;
+            var isDirectory = Directory.Exists(source);
             var isAlreadyOnDesktop = string.Equals(sourceParent, desktop, StringComparison.OrdinalIgnoreCase);
 
             if (!isAlreadyOnDesktop)
             {
-                var isDirectory = Directory.Exists(source);
                 var name = Path.GetFileName(source.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
                 destination = isDirectory
                     ? GetUniquePath(desktop, name, string.Empty)
@@ -1108,13 +1146,7 @@ public partial class MainWindow : System.Windows.Window
                 }
             }
 
-            foreach (var zone in _state.Zones)
-            {
-                zone.Items.RemoveAll(item =>
-                    !DesktopItem.IsShellLocation(item.Path) &&
-                    string.Equals(Path.GetFullPath(item.Path), source, StringComparison.OrdinalIgnoreCase));
-            }
-
+            RemoveMappingsForMovedPath(source, isDirectory);
             targetZone.Items.Add(DesktopItem.FromPath(destination, targetZone.CategoryKey));
             mapped++;
         }
@@ -1188,7 +1220,8 @@ public partial class MainWindow : System.Windows.Window
                 continue;
             }
 
-            var destination = File.Exists(source)
+            var isDirectory = Directory.Exists(source);
+            var destination = !isDirectory
                 ? GetUniquePath(targetDirectory, Path.GetFileNameWithoutExtension(source), Path.GetExtension(source))
                 : GetUniquePath(targetDirectory, sourceName, string.Empty);
 
@@ -1214,12 +1247,7 @@ public partial class MainWindow : System.Windows.Window
                 continue;
             }
 
-            foreach (var zone in _state.Zones)
-            {
-                zone.Items.RemoveAll(item =>
-                    !DesktopItem.IsShellLocation(item.Path) &&
-                    string.Equals(Path.GetFullPath(item.Path), source, StringComparison.OrdinalIgnoreCase));
-            }
+            RemoveMappingsForMovedPath(source, isDirectory);
 
             // The item now lives inside the mapped folder, so it should not remain as a
             // separate desktop mapping in any zone.
@@ -1251,22 +1279,16 @@ public partial class MainWindow : System.Windows.Window
 
     private void HandleItemDragCompleted(ItemDragCompletedEventArgs args)
     {
-        if ((args.Effects & DragDropEffects.Move) == 0 ||
-            DesktopItem.IsShellLocation(args.Path) ||
+        // Explorer may report Copy/None for directory drops even when the source directory
+        // was moved successfully. The source path is the reliable signal for cleanup.
+        if (DesktopItem.IsShellLocation(args.Path) ||
             File.Exists(args.Path) ||
             Directory.Exists(args.Path))
         {
             return;
         }
 
-        var removed = 0;
-        foreach (var zone in _state.Zones)
-        {
-            removed += zone.Items.RemoveAll(item =>
-                !DesktopItem.IsShellLocation(item.Path) &&
-                string.Equals(item.Path, args.Path, StringComparison.OrdinalIgnoreCase));
-        }
-
+        var removed = RemoveMappingsForMovedPath(args.Path, args.IsDirectory);
         if (removed == 0)
         {
             return;

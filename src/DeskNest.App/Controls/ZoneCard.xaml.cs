@@ -36,11 +36,11 @@ internal sealed class ItemMoveEventArgs(ItemDragPayload payload, int targetIndex
     public int TargetIndex { get; } = targetIndex;
 }
 
-internal sealed class ItemDragCompletedEventArgs(string path, DragDropEffects effects) : EventArgs
+internal sealed class ItemDragCompletedEventArgs(string path, bool isDirectory) : EventArgs
 {
     public string Path { get; } = path;
 
-    public DragDropEffects Effects { get; } = effects;
+    public bool IsDirectory { get; } = isDirectory;
 }
 
 internal sealed class FolderFilesDroppedEventArgs(DesktopItem folder, IReadOnlyList<string> paths) : EventArgs
@@ -927,8 +927,9 @@ public partial class ZoneCard : UserControl
             return;
         }
 
+        var isDirectory = Directory.Exists(item.Path);
         var data = new DataObject(InternalItemFormat, new ItemDragPayload(Model.Id, item.Id));
-        if (File.Exists(item.Path) || Directory.Exists(item.Path))
+        if (File.Exists(item.Path) || isDirectory)
         {
             data.SetFileDropList(new StringCollection { item.Path });
         }
@@ -936,10 +937,9 @@ public partial class ZoneCard : UserControl
         SelectionClearRequested?.Invoke(this, EventArgs.Empty);
         StartDragPreview(item, (FrameworkElement)sender);
         GiveFeedback += OnItemDragGiveFeedback;
-        var effects = DragDropEffects.None;
         try
         {
-            effects = DragDrop.DoDragDrop(this, data, DragDropEffects.Copy | DragDropEffects.Move);
+            DragDrop.DoDragDrop(this, data, DragDropEffects.Copy | DragDropEffects.Move);
         }
         finally
         {
@@ -949,7 +949,7 @@ public partial class ZoneCard : UserControl
             DragPreviewEnded?.Invoke();
         }
 
-        ItemDragCompleted?.Invoke(this, new ItemDragCompletedEventArgs(item.Path, effects));
+        ItemDragCompleted?.Invoke(this, new ItemDragCompletedEventArgs(item.Path, isDirectory));
     }
 
     private void StartDragPreview(DesktopItem item, FrameworkElement sourceElement)
@@ -1522,10 +1522,10 @@ public partial class ZoneCard : UserControl
 
     private void OnDrop(object sender, DragEventArgs e)
     {
-        var placement = GetItemDropPlacement(e);
         HideDropIndicator();
         if (e.Data.GetData(InternalItemFormat) is ItemDragPayload payload)
         {
+            var placement = GetItemDropPlacement(e);
             ItemMoveRequested?.Invoke(this, new ItemMoveEventArgs(payload, placement.Index));
             e.Handled = true;
             return;
