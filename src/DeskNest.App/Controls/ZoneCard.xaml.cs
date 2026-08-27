@@ -93,6 +93,7 @@ public partial class ZoneCard : UserControl
             thumb.DragCompleted += OnResizeDragCompleted;
         }
         Loaded += (_, _) => UpdateHeaderPresentation(animate: false);
+        Unloaded += (_, _) => HideDropIndicator();
         SizeChanged += (_, _) => UpdateHeaderPresentation(animate: false);
         ApplyModel();
     }
@@ -1125,15 +1126,31 @@ public partial class ZoneCard : UserControl
             return;
         }
 
-        var screenPoint = new Point(cursor.X, cursor.Y);
-        var cardPoint = PointFromScreen(screenPoint);
-        if (cardPoint.X < 0 || cardPoint.Y < 0 || cardPoint.X > ActualWidth || cardPoint.Y > ActualHeight)
+        // RenderZones can replace a card while the dispatcher still has one final timer tick
+        // queued. A detached visual cannot perform screen-to-local coordinate conversion.
+        if (!IsLoaded || PresentationSource.FromVisual(this) is null)
         {
             HideDropIndicator();
             return;
         }
 
-        UpdateDragReflow(payload, ItemsPanel.PointFromScreen(screenPoint));
+        try
+        {
+            var screenPoint = new Point(cursor.X, cursor.Y);
+            var cardPoint = PointFromScreen(screenPoint);
+            if (cardPoint.X < 0 || cardPoint.Y < 0 || cardPoint.X > ActualWidth || cardPoint.Y > ActualHeight)
+            {
+                HideDropIndicator();
+                return;
+            }
+
+            UpdateDragReflow(payload, ItemsPanel.PointFromScreen(screenPoint));
+        }
+        catch (InvalidOperationException)
+        {
+            // The visual may have been detached between the guard and the conversion.
+            HideDropIndicator();
+        }
     }
 
     private void UpdateDragReflow(ItemDragPayload payload, Point pointer)
