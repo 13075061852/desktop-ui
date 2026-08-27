@@ -35,6 +35,7 @@ public partial class MainWindow : System.Windows.Window
     private readonly DesktopIconVisibilityService _iconVisibility = new();
     private readonly DesktopWallpaperService _wallpaperService = new();
     private readonly StartupService _startupService = new();
+    private readonly ShellNewService _shellNewService = new();
     private readonly DispatcherTimer _saveTimer;
     private readonly DispatcherTimer _statusTimer;
     private readonly DispatcherTimer _menuDismissTimer;
@@ -367,17 +368,30 @@ public partial class MainWindow : System.Windows.Window
             Placement = PlacementMode.MousePoint,
             StaysOpen = false
         };
-        var newFile = new MenuItem { Header = "新建文件" };
-        newFile.Click += (_, _) => CreateInDesktopContext("documents", CreateFileInZone);
-        var newFolder = new MenuItem { Header = "新建文件夹" };
-        newFolder.Click += (_, _) => CreateInDesktopContext("folders", CreateFolderInZone);
-        var newShortcut = new MenuItem { Header = "新建快捷方式" };
-        newShortcut.Click += (_, _) => CreateInDesktopContext("apps", CreateShortcutInZone);
-        menu.Items.Add(newFile);
-        menu.Items.Add(newFolder);
-        menu.Items.Add(newShortcut);
+        menu.Items.Add(BuildDesktopNewMenu());
         menu.IsOpen = true;
         e.Handled = true;
+    }
+
+    private MenuItem BuildDesktopNewMenu()
+    {
+        var newMenu = new MenuItem { Header = "新建" };
+        var newFolder = new MenuItem { Header = "文件夹" };
+        newFolder.Click += (_, _) => CreateInDesktopContext("folders", CreateFolderInZone);
+        var newShortcut = new MenuItem { Header = "快捷方式" };
+        newShortcut.Click += (_, _) => CreateInDesktopContext("apps", CreateShortcutInZone);
+        newMenu.Items.Add(newFolder);
+        newMenu.Items.Add(newShortcut);
+        newMenu.Items.Add(new Separator());
+
+        foreach (var definition in _shellNewService.GetDefinitions())
+        {
+            var templateMenuItem = new MenuItem { Header = definition.DisplayName };
+            templateMenuItem.Click += (_, _) => CreateShellNewFile(definition);
+            newMenu.Items.Add(templateMenuItem);
+        }
+
+        return newMenu;
     }
 
     private void CreateInDesktopContext(string categoryKey, Action<ZoneModel> createAction)
@@ -392,6 +406,51 @@ public partial class MainWindow : System.Windows.Window
         }
 
         createAction(targetZone);
+    }
+
+    private void CreateShellNewFile(ShellNewDefinition definition, ZoneModel? requestedZone = null)
+    {
+        var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        var baseName = MakeSafeFileName("新建 " + definition.DisplayName);
+        var path = GetUniquePath(desktop, baseName, definition.OutputExtension);
+        if (!_shellNewService.CreateFile(definition, path))
+        {
+            ShowStatus($"无法创建文件“{Path.GetFileName(path)}”，请检查桌面目录权限");
+            return;
+        }
+
+        var targetZone = requestedZone
+                         ?? _state.Zones.FirstOrDefault(zone =>
+                             zone.CategoryKey == _classifier.Classify(path))
+                         ?? _state.Zones.FirstOrDefault(zone => zone.CategoryKey == "other")
+                         ?? _state.Zones.FirstOrDefault();
+        if (targetZone is null)
+        {
+            ShowStatus($"文件已创建：{Path.GetFileName(path)}");
+            return;
+        }
+
+        var item = DesktopItem.FromPath(path, targetZone.CategoryKey);
+        targetZone.Items.Add(item);
+        NotifyShellDirectoriesChanged(desktop);
+        _iconService.Invalidate();
+        var addition = new DesktopMappingAddition(targetZone, item);
+        RenderZones();
+        HighlightMappingZones([addition]);
+        RequestSave();
+        ShowStatus(FormatMappingStatus([addition]));
+    }
+
+    private static string MakeSafeFileName(string value)
+    {
+        var invalidCharacters = Path.GetInvalidFileNameChars();
+        var builder = new System.Text.StringBuilder(value.Length);
+        foreach (var character in value)
+        {
+            builder.Append(invalidCharacters.Contains(character) ? '_' : character);
+        }
+
+        return builder.ToString().Trim();
     }
 
     private bool ContainsPoint(FrameworkElement element, Point point)
@@ -510,7 +569,8 @@ public partial class MainWindow : System.Windows.Window
         {
             var card = new ZoneCard(zone, _iconService)
             {
-                BoundsConstraint = ConstrainZoneBounds
+                BoundsConstraint = ConstrainZoneBounds,
+                ShellNewDefinitionsProvider = _shellNewService.GetDefinitions
             };
             card.SetLayoutLocked(_state.LayoutLocked);
             card.SetVisualOptions(_state.PanelOpacity, _state.IconSize, lightTheme);
@@ -522,6 +582,7 @@ public partial class MainWindow : System.Windows.Window
             card.NewFileRequested += (_, _) => CreateFileInZone(zone);
             card.NewFolderRequested += (_, _) => CreateFolderInZone(zone);
             card.NewShortcutRequested += (_, _) => CreateShortcutInZone(zone);
+            card.ShellNewRequested += (_, args) => CreateShellNewFile(args.Definition, zone);
             card.FilesDropped += (_, args) => AddPathsToZone(zone, args.Paths);
             card.FolderFilesDropped += (_, args) => MoveFilesIntoFolder(args.Folder, args.Paths);
             card.ItemMoveRequested += (_, args) => MoveItem(zone, args.Payload, args.TargetIndex);

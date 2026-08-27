@@ -50,6 +50,11 @@ internal sealed class FolderFilesDroppedEventArgs(DesktopItem folder, IReadOnlyL
     public IReadOnlyList<string> Paths { get; } = paths;
 }
 
+internal sealed class ShellNewRequestedEventArgs(ShellNewDefinition definition) : EventArgs
+{
+    public ShellNewDefinition Definition { get; } = definition;
+}
+
 public partial class ZoneCard : UserControl
 {
     public const string InternalItemFormat = "DeskNest.InternalDesktopItem";
@@ -108,6 +113,7 @@ public partial class ZoneCard : UserControl
     public ZoneModel Model { get; }
 
     internal Func<ZoneModel, ZoneBounds, ZoneBounds, ZoneAlignmentResult>? BoundsConstraint { get; set; }
+    internal Func<IReadOnlyList<ShellNewDefinition>>? ShellNewDefinitionsProvider { get; set; }
     internal Action<double?, double?>? AlignmentGuidesChanged { get; set; }
     internal Action<ZoneCard>? DragPreviewActivated { get; set; }
     internal Action? DragPreviewEnded { get; set; }
@@ -120,6 +126,7 @@ public partial class ZoneCard : UserControl
     internal event EventHandler? NewShortcutRequested;
     internal event EventHandler<FilesDroppedEventArgs>? FilesDropped;
     internal event EventHandler<FolderFilesDroppedEventArgs>? FolderFilesDropped;
+    internal event EventHandler<ShellNewRequestedEventArgs>? ShellNewRequested;
     internal event EventHandler<ItemMoveEventArgs>? ItemMoveRequested;
     internal event EventHandler<ItemDragCompletedEventArgs>? ItemDragCompleted;
     internal event EventHandler<ItemActionEventArgs>? ItemSelected;
@@ -858,15 +865,27 @@ public partial class ZoneCard : UserControl
             Placement = PlacementMode.MousePoint,
             StaysOpen = false
         };
-        var newFile = new MenuItem { Header = "新建文件" };
+        var newMenu = new MenuItem { Header = "新建" };
+        var newFile = new MenuItem { Header = "文件" };
         newFile.Click += (_, _) => NewFileRequested?.Invoke(this, EventArgs.Empty);
-        var newFolder = new MenuItem { Header = "新建文件夹" };
+        var newFolder = new MenuItem { Header = "文件夹" };
         newFolder.Click += (_, _) => NewFolderRequested?.Invoke(this, EventArgs.Empty);
-        var newShortcut = new MenuItem { Header = "新建快捷方式" };
+        var newShortcut = new MenuItem { Header = "快捷方式" };
         newShortcut.Click += (_, _) => NewShortcutRequested?.Invoke(this, EventArgs.Empty);
-        menu.Items.Add(newFile);
-        menu.Items.Add(newFolder);
-        menu.Items.Add(newShortcut);
+        newMenu.Items.Add(newFile);
+        newMenu.Items.Add(newFolder);
+        newMenu.Items.Add(newShortcut);
+        newMenu.Items.Add(new Separator());
+        foreach (var definition in ShellNewDefinitionsProvider?.Invoke() ?? [])
+        {
+            var templateMenuItem = new MenuItem { Header = definition.DisplayName };
+            templateMenuItem.Click += (_, _) => ShellNewRequested?.Invoke(
+                this,
+                new ShellNewRequestedEventArgs(definition));
+            newMenu.Items.Add(templateMenuItem);
+        }
+
+        menu.Items.Add(newMenu);
         RegisterTransientMenu(menu);
         menu.IsOpen = true;
         e.Handled = true;
