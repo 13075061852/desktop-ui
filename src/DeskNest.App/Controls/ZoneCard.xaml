@@ -163,14 +163,6 @@
                                Margin="0,9,5,10" Visibility="Collapsed"
                                Style="{StaticResource SlimScrollBarStyle}" Scroll="OnSlimScroll"
                                LostMouseCapture="OnSlimScrollBarLostMouseCapture" />
-                    <Canvas x:Name="DropIndicatorCanvas" IsHitTestVisible="False">
-                        <Border x:Name="DropIndicator" Visibility="Collapsed" Opacity="0"
-                                Background="{StaticResource AccentBrush}" CornerRadius="2">
-                            <Border.Effect>
-                                <DropShadowEffect BlurRadius="9" ShadowDepth="0" Opacity="0.9" Color="#76D7C4" />
-                            </Border.Effect>
-                        </Border>
-                    </Canvas>
                 </Grid>
             </Grid>
         </Border>

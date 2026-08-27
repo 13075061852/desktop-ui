@@ -60,6 +60,7 @@ public partial class MainWindow : System.Windows.Window
     public MainWindow()
     {
         InitializeComponent();
+        DragGhostLayer.Attach(DragGhostCanvas);
 
         _saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(550) };
         _saveTimer.Tick += async (_, _) =>

@@ -56,6 +56,43 @@ internal sealed class ShellNewRequestedEventArgs(ShellNewDefinition definition) 
     public ShellNewDefinition Definition { get; } = definition;
 }
 
+/// <summary>
+/// Coordinates an in-flight item drag between the card that owns the drag preview and the card
+/// that accepts the drop. The destination card defers its model reorder until the preview has
+/// visually landed in the open slot, which produces the iOS-style settle animation.
+/// </summary>
+internal static class LiveItemDragSession
+{
+    internal static bool SettlePending { get; set; }
+
+    internal static Size TileSize { get; set; } = new(84, 90);
+
+    internal static Action<Point>? RequestSettle { get; set; }
+
+    internal static Action? SettleCompleted { get; set; }
+
+    internal static void Reset()
+    {
+        SettlePending = false;
+        RequestSettle = null;
+        SettleCompleted = null;
+    }
+}
+
+/// <summary>
+/// Hosts the in-window drag ghost tile. The overlay window renders reliably while the OLE
+/// drag loop pumps messages, unlike a transparent Popup, and elements inside the window are
+/// invisible to WindowFromPoint so they cannot destabilise drop-target detection.
+/// </summary>
+internal static class DragGhostLayer
+{
+    private static Canvas? _host;
+
+    internal static Canvas? Host => _host;
+
+    internal static void Attach(Canvas host) => _host = host;
+}
+
 public partial class ZoneCard : UserControl
 {
     public const string InternalItemFormat = "DeskNest.InternalDesktopItem";
@@ -69,10 +106,17 @@ public partial class ZoneCard : UserControl
     private Point _itemDragStart;
     private UIElement? _capturedHeader;
     private ContextMenu? _openContextMenu;
-    private Popup? _dragPreviewPopup;
+    private Border? _ghostElement;
     private FrameworkElement? _dragSourceElement;
     private ItemDragPayload? _activeDragPayload;
-    private int _dropIndicatorIndex = -1;
+    private Point _dragSourceOrigin;
+    private Point _lastGapSlotPoint;
+    private Size _dragTileSize = new(84, 90);
+    private bool _settleInProgress;
+    private ItemDragCompletedEventArgs? _pendingCompletedArgs;
+    private ItemDragPayload? _activeReflowPayload;
+    private DropPlacement? _lastPlacement;
+    private bool _dropCommitted;
     private int _liveReflowIndex = -1;
     private int _liveReflowRow = -1;
     private Guid _liveReflowItemId;
@@ -108,7 +152,7 @@ public partial class ZoneCard : UserControl
             thumb.DragCompleted += OnResizeDragCompleted;
         }
         Loaded += (_, _) => UpdateHeaderPresentation(animate: false);
-        Unloaded += (_, _) => HideDropIndicator();
+        Unloaded += (_, _) => EndLiveReflow();
         SizeChanged += (_, _) => UpdateHeaderPresentation(animate: false);
         ApplyModel();
     }
@@ -1132,76 +1176,275 @@ public partial class ZoneCard : UserControl
         GiveFeedback += OnItemDragGiveFeedback;
         try
         {
-            DragDrop.DoDragDrop(this, data, DragDropEffects.Copy | DragDropEffects.Move);
+            var result = DragDrop.DoDragDrop(this, data, DragDropEffects.Copy | DragDropEffects.Move);
         }
         finally
         {
             GiveFeedback -= OnItemDragGiveFeedback;
-            StopDragPreview();
-            HideDropIndicator();
-            DragPreviewEnded?.Invoke();
+            FinishDragAfterDrop(item.Path, isDirectory);
+        }
+    }
+
+    private void FinishDragAfterDrop(string path, bool isDirectory)
+    {
+        if (_settleInProgress)
+        {
+            // A destination card accepted the drop and owns the landing sequence. It raises
+            // ItemMoveRequested plus this completion event once the preview lands in its slot.
+            _pendingCompletedArgs = new ItemDragCompletedEventArgs(path, isDirectory);
+            return;
         }
 
-        ItemDragCompleted?.Invoke(this, new ItemDragCompletedEventArgs(item.Path, isDirectory));
+        // Windows OLE frequently fails to deliver the Drop callback over the fullscreen
+        // topmost overlay (DoDragDrop returns with effect=None right after a DragLeave).
+        // iOS-style recovery: trust the last live reflow placement instead. If the pointer
+        // came to rest over this card, the item lands exactly where the reflow opened a slot;
+        // otherwise the drag is treated as cancelled and everything springs home.
+        var payload = _activeReflowPayload;
+        var placement = _lastPlacement;
+        LiveItemDragSession.Reset();
+        if (!_dropCommitted && payload is not null && placement is not null && IsPointerWithinCard())
+        {
+            var move = new ItemMoveEventArgs(payload, placement.Value.Index);
+            _pendingCompletedArgs = new ItemDragCompletedEventArgs(path, isDirectory);
+            LiveItemDragSession.SettleCompleted = () => ItemMoveRequested?.Invoke(this, move);
+            var center = GetSlotCenterScreenPoint(_lastGapSlotPoint) ?? GetCursorCenterFallback();
+            BeginPreviewSettle(center);
+            return;
+        }
+
+        // Released with no accepting card (cancel): fly the tile back home, spring the
+        // displaced neighbours into their original slots, then report completion.
+        EndLiveReflow();
+        BeginPreviewReturn(() =>
+        {
+            StopDragPreview();
+            DragPreviewEnded?.Invoke();
+            ItemDragCompleted?.Invoke(this, new ItemDragCompletedEventArgs(path, isDirectory));
+        });
+    }
+
+    private bool IsPointerWithinCard()
+    {
+        if (!IsLoaded || PresentationSource.FromVisual(this) is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            if (!NativeMethods.GetCursorPos(out var cursor))
+            {
+                return false;
+            }
+
+            var cardPoint = PointFromScreen(new Point(cursor.X, cursor.Y));
+            return cardPoint.X >= 0 && cardPoint.Y >= 0 &&
+                   cardPoint.X <= ActualWidth && cardPoint.Y <= ActualHeight;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private void StartDragPreview(DesktopItem item, FrameworkElement sourceElement)
     {
+        _dropCommitted = false;
+        _lastPlacement = null;
+        _activeReflowPayload = null;
+
         _dragSourceElement = sourceElement;
+        _dragSourceOrigin = GetLayoutOrigin(sourceElement);
+        _lastGapSlotPoint = _dragSourceOrigin;
+        var tileWidth = Math.Max(1, sourceElement.ActualWidth);
+        var tileHeight = Math.Max(1, sourceElement.ActualHeight);
+        _dragTileSize = new Size(tileWidth, tileHeight);
+        LiveItemDragSession.TileSize = _dragTileSize;
 
         // Render the actual tile instead of rebuilding an approximation. This keeps icon/list
         // mode, icon size, label trimming, colors and spacing identical to the original item.
-        var pixelWidth = Math.Max(1, (int)Math.Ceiling(sourceElement.ActualWidth));
-        var pixelHeight = Math.Max(1, (int)Math.Ceiling(sourceElement.ActualHeight));
+        var pixelWidth = Math.Max(1, (int)Math.Ceiling(tileWidth));
+        var pixelHeight = Math.Max(1, (int)Math.Ceiling(tileHeight));
         var snapshot = new RenderTargetBitmap(pixelWidth, pixelHeight, 96, 96, PixelFormats.Pbgra32);
         snapshot.Render(sourceElement);
         snapshot.Freeze();
         sourceElement.Opacity = 0.18;
 
-        _dragPreviewPopup = new Popup
+        var preview = new Image
         {
-            AllowsTransparency = true,
+            Width = tileWidth,
+            Height = tileHeight,
+            Source = snapshot,
+            Stretch = Stretch.Fill,
             IsHitTestVisible = false,
-            Placement = PlacementMode.AbsolutePoint,
-            StaysOpen = true,
-            Child = new Border
+            RenderTransformOrigin = new Point(0.5, 0.5),
+            RenderTransform = new ScaleTransform(1, 1),
+            Effect = new DropShadowEffect
             {
-                Width = sourceElement.ActualWidth,
-                Height = sourceElement.ActualHeight,
-                Background = Brushes.Transparent,
-                BorderBrush = Brushes.Transparent,
-                BorderThickness = new Thickness(0),
-                Child = new Image
-                {
-                    Width = sourceElement.ActualWidth,
-                    Height = sourceElement.ActualHeight,
-                    Source = snapshot,
-                    Stretch = Stretch.Fill,
-                    IsHitTestVisible = false
-                }
+                BlurRadius = 26,
+                ShadowDepth = 7,
+                Direction = 270,
+                Opacity = 0.4,
+                Color = Color.FromRgb(18, 30, 46)
             }
         };
-        UpdateDragPreviewPosition();
-        _dragPreviewPopup.IsOpen = true;
-        Dispatcher.BeginInvoke(MakeDragPreviewClickThrough, System.Windows.Threading.DispatcherPriority.Loaded);
-    }
-
-    private void MakeDragPreviewClickThrough()
-    {
-        if (_dragPreviewPopup?.Child is not Visual previewVisual ||
-            PresentationSource.FromVisual(previewVisual) is not HwndSource source)
+        // The ghost lives inside the overlay window instead of a Popup. WPF popups do not
+        // render while the OLE drag loop is pumping messages, and a separate hwnd also
+        // participates in WindowFromPoint, which destabilises drop-target detection. The
+        // soft tinted surface keeps the lifted tile readable over any wallpaper, like the
+        // frosted backdrop iOS paints behind a picked-up icon.
+        var ghost = new Border
+        {
+            Width = tileWidth,
+            Height = tileHeight,
+            Background = new SolidColorBrush(Color.FromArgb(46, 255, 255, 255)),
+            CornerRadius = new CornerRadius(10),
+            Child = preview,
+            IsHitTestVisible = false
+        };
+        _ghostElement = ghost;
+        var host = DragGhostLayer.Host;
+        if (host is null)
         {
             return;
         }
 
-        var extendedStyle = NativeMethods.GetWindowLongPtr(source.Handle, NativeMethods.GwlExStyle).ToInt64();
-        NativeMethods.SetWindowLongPtr(
-            source.Handle,
-            NativeMethods.GwlExStyle,
-            new nint(extendedStyle |
-                     NativeMethods.WsExTransparent |
-                     NativeMethods.WsExNoActivate |
-                     NativeMethods.WsExToolWindow));
+        host.Children.Add(ghost);
+        UpdateDragPreviewPosition();
+        ghost.Measure(new Size(tileWidth, tileHeight));
+        ghost.Arrange(new Rect(0, 0, tileWidth, tileHeight));
+
+        // iOS-style lift: the tile springs up slightly larger with a soft shadow beneath it.
+        AnimatePreviewScale(1.12, TimeSpan.FromMilliseconds(190), 0.55);
+
+        LiveItemDragSession.SettlePending = true;
+        LiveItemDragSession.RequestSettle = BeginPreviewSettle;
+        LiveItemDragSession.SettleCompleted = null;
+    }
+
+    private void BeginPreviewSettle(Point slotCenterDip)
+    {
+        _settleInProgress = true;
+        EndReflowTracking();
+        _liveReflowIndex = -1;
+        _liveReflowRow = -1;
+        _liveReflowItemId = Guid.Empty;
+
+        // Fly the lifted tile into the open slot and shrink it back to rest size, then let the
+        // destination card commit the model reorder so the rebuilt layout matches the landing.
+        AnimatePreviewTo(slotCenterDip, TimeSpan.FromMilliseconds(270), () =>
+        {
+            StopDragPreview();
+            ClearLiveReflowTransforms();
+            DragPreviewEnded?.Invoke();
+            LiveItemDragSession.SettleCompleted?.Invoke();
+            LiveItemDragSession.Reset();
+            _settleInProgress = false;
+            var completed = _pendingCompletedArgs;
+            _pendingCompletedArgs = null;
+            if (completed is not null)
+            {
+                ItemDragCompleted?.Invoke(this, completed);
+            }
+        });
+    }
+
+    private void BeginPreviewReturn(Action completed)
+    {
+        if (_ghostElement is null || _dragSourceElement is null || !IsLoaded)
+        {
+            StopDragPreview();
+            completed();
+            return;
+        }
+
+        Point centerDip;
+        try
+        {
+            var dpi = VisualTreeHelper.GetDpi(this);
+            var slotCenter = new Point(
+                _dragSourceOrigin.X + _dragTileSize.Width / 2,
+                _dragSourceOrigin.Y + _dragTileSize.Height / 2);
+            var screen = ItemsPanel.PointToScreen(slotCenter);
+            centerDip = new Point(screen.X / dpi.DpiScaleX, screen.Y / dpi.DpiScaleY);
+        }
+        catch (InvalidOperationException)
+        {
+            StopDragPreview();
+            completed();
+            return;
+        }
+
+        AnimatePreviewTo(centerDip, TimeSpan.FromMilliseconds(240), () =>
+        {
+            StopDragPreview();
+            completed();
+        });
+    }
+
+    private void AnimatePreviewTo(Point centerDip, TimeSpan duration, Action completed)
+    {
+        if (_ghostElement is not Border ghost)
+        {
+            completed();
+            return;
+        }
+
+        var targetX = centerDip.X - ghost.Width / 2;
+        var targetY = centerDip.Y - ghost.Height / 2;
+        AnimateAxis(ghost, Canvas.LeftProperty, GetGhostOffset(ghost, Canvas.LeftProperty), targetX, duration, 0.45, null);
+        AnimateAxis(ghost, Canvas.TopProperty, GetGhostOffset(ghost, Canvas.TopProperty), targetY, duration, 0.45, null);
+        AnimatePreviewScale(1.0, duration, 0.45, completed);
+    }
+
+    private static double GetGhostOffset(FrameworkElement ghost, DependencyProperty property)
+    {
+        var value = (double)ghost.GetValue(property);
+        return double.IsNaN(value) ? 0 : value;
+    }
+
+    private void AnimatePreviewScale(double target, TimeSpan duration, double overshoot, Action? completed = null)
+    {
+        if (_ghostElement?.Child is Image { RenderTransform: ScaleTransform scale })
+        {
+            AnimateAxis(scale, ScaleTransform.ScaleXProperty, scale.ScaleX, target, duration, overshoot, completed);
+            AnimateAxis(scale, ScaleTransform.ScaleYProperty, scale.ScaleY, target, duration, overshoot, null);
+        }
+        else
+        {
+            completed?.Invoke();
+        }
+    }
+
+    private static void AnimateAxis(
+        DependencyObject target,
+        DependencyProperty property,
+        double from,
+        double to,
+        TimeSpan duration,
+        double overshoot,
+        Action? completed)
+    {
+        // BackEase with a small amplitude approximates the critically damped spring used by
+        // iOS home screen reordering. Base value is set to the target first so FillBehavior
+        //.Stop rests exactly on the destination once the animation completes.
+        var animation = new DoubleAnimation(from, to, duration)
+        {
+            FillBehavior = FillBehavior.Stop,
+            EasingFunction = overshoot > 0
+                ? new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = overshoot }
+                : new QuadraticEase { EasingMode = EasingMode.EaseOut }
+        };
+        if (completed is not null)
+        {
+            animation.Completed += (_, _) => completed();
+        }
+
+        var animatable = (IAnimatable)target;
+        animatable.BeginAnimation(property, null);
+        target.SetValue(property, to);
+        animatable.BeginAnimation(property, animation);
     }
 
     private void OnItemDragGiveFeedback(object sender, GiveFeedbackEventArgs e)
@@ -1213,25 +1456,29 @@ public partial class ZoneCard : UserControl
 
     private void UpdateDragPreviewPosition()
     {
-        if (_dragPreviewPopup is null || !NativeMethods.GetCursorPos(out var cursor))
+        if (_ghostElement is null || !NativeMethods.GetCursorPos(out var cursor))
         {
             return;
         }
 
         var dpi = VisualTreeHelper.GetDpi(this);
-        // Keep the preview close to the pointer without covering its native hit-test point.
-        // The popup is also marked WS_EX_TRANSPARENT after creation so drop targets keep receiving events.
-        _dragPreviewPopup.HorizontalOffset = cursor.X / dpi.DpiScaleX + 18;
-        _dragPreviewPopup.VerticalOffset = cursor.Y / dpi.DpiScaleY + 18;
+        // Keep the tile centered under the pointer like the iOS home screen. The ghost lives
+        // in the overlay window, so window coordinates equal desktop coordinates.
+        Canvas.SetLeft(_ghostElement, cursor.X / dpi.DpiScaleX - _ghostElement.Width / 2);
+        Canvas.SetTop(_ghostElement, cursor.Y / dpi.DpiScaleY - _ghostElement.Height / 2);
     }
 
     private void StopDragPreview()
     {
-        if (_dragPreviewPopup is not null)
+        if (_ghostElement is not null)
         {
-            _dragPreviewPopup.IsOpen = false;
-            _dragPreviewPopup.Child = null;
-            _dragPreviewPopup = null;
+            var host = DragGhostLayer.Host;
+            if (host is not null)
+            {
+                host.Children.Remove(_ghostElement);
+            }
+            _ghostElement.Child = null;
+            _ghostElement = null;
         }
 
         if (_dragSourceElement is not null)
@@ -1322,7 +1569,7 @@ public partial class ZoneCard : UserControl
         }
         else
         {
-            HideDropIndicator();
+            EndLiveReflow();
         }
 
         e.Handled = true;
@@ -1339,7 +1586,7 @@ public partial class ZoneCard : UserControl
         // queued. A detached visual cannot perform screen-to-local coordinate conversion.
         if (!IsLoaded || PresentationSource.FromVisual(this) is null)
         {
-            HideDropIndicator();
+            EndLiveReflow();
             return;
         }
 
@@ -1349,7 +1596,7 @@ public partial class ZoneCard : UserControl
             var cardPoint = PointFromScreen(screenPoint);
             if (cardPoint.X < 0 || cardPoint.Y < 0 || cardPoint.X > ActualWidth || cardPoint.Y > ActualHeight)
             {
-                HideDropIndicator();
+                EndLiveReflow();
                 return;
             }
 
@@ -1358,7 +1605,7 @@ public partial class ZoneCard : UserControl
         catch (InvalidOperationException)
         {
             // The visual may have been detached between the guard and the conversion.
-            HideDropIndicator();
+            EndLiveReflow();
         }
     }
 
@@ -1366,8 +1613,10 @@ public partial class ZoneCard : UserControl
     {
         DragPreviewActivated?.Invoke(this);
         var placement = GetItemDropPlacement(pointer);
-        ShowDropIndicator(placement);
+        // No insertion bar: like the iOS home screen, the open slot itself is the indicator.
         ApplyLiveItemReflow(payload, placement);
+        _activeReflowPayload = payload;
+        _lastPlacement = placement;
     }
 
     private void OnDragLeave(object sender, DragEventArgs e)
@@ -1378,7 +1627,7 @@ public partial class ZoneCard : UserControl
         var point = e.GetPosition(this);
         if (point.X < 0 || point.Y < 0 || point.X > ActualWidth || point.Y > ActualHeight)
         {
-            HideDropIndicator();
+            EndLiveReflow();
             ClearFolderDropTarget();
         }
         else if (!IsPointerOverFolderDropTarget(point))
@@ -1526,6 +1775,7 @@ public partial class ZoneCard : UserControl
             .ToArray();
         if (elements.Length == 0)
         {
+            _lastGapSlotPoint = new Point(10, 14);
             return;
         }
 
@@ -1552,11 +1802,14 @@ public partial class ZoneCard : UserControl
                 AnimateItemToSlot(elements[index], slots[index], slots[destinationIndex]);
             }
 
+            // The slot the dragged tile slides into; the drop settle animation lands here.
+            _lastGapSlotPoint = slots[Math.Clamp(insertionIndex, 0, slots.Count - 1)];
             return;
         }
 
         slots.Add(GetNextSlot(elements, slots));
         var targetIndex = Math.Clamp(placement.Index, 0, elements.Length);
+        _lastGapSlotPoint = slots[Math.Min(targetIndex, slots.Count - 1)];
         for (var index = 0; index < elements.Length; index++)
         {
             var destinationIndex = index >= targetIndex ? index + 1 : index;
@@ -1639,117 +1892,107 @@ public partial class ZoneCard : UserControl
             return;
         }
 
-        // DragOver can arrive every 16 ms. A long eased animation gets restarted before it
-        // reaches its target, which makes fast vertical sorting feel like it is trailing behind.
-        translation.BeginAnimation(property, new DoubleAnimation(current, target, TimeSpan.FromMilliseconds(42))
+        // DragOver can arrive every 16 ms. A spring with a small overshoot glides tiles into
+        // their new slots like the iOS home screen; hysteresis keeps targets stable so the
+        // animation is restarted only when the pointer actually crosses a boundary.
+        translation.BeginAnimation(property, new DoubleAnimation(current, target, TimeSpan.FromMilliseconds(210))
         {
-            FillBehavior = FillBehavior.Stop
+            FillBehavior = FillBehavior.Stop,
+            EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.32 }
         });
     }
 
-    private void ResetLiveItemReflow()
+    /// <summary>Stops pointer tracking but keeps the reflowed layout (used right before settle).</summary>
+    private void EndReflowTracking()
+    {
+        _dragTrackingTimer.Stop();
+        _activeDragPayload = null;
+        _activeReflowPayload = null;
+    }
+
+    /// <summary>Ends a live reorder: springs displaced tiles back to their layout slots.</summary>
+    private void EndLiveReflow()
+    {
+        EndReflowTracking();
+        _lastPlacement = null;
+        _dropCommitted = false;
+        _liveReflowIndex = -1;
+        _liveReflowRow = -1;
+        _liveReflowItemId = Guid.Empty;
+        _dragLayoutOrigins.Clear();
+        foreach (var element in ItemsPanel.Children
+                     .OfType<FrameworkElement>()
+                     .Where(element => element.Tag is DesktopItem))
+        {
+            SpringTransformHome(element);
+        }
+    }
+
+    /// <summary>Clears reflow offsets without animating; used after the preview has landed.</summary>
+    private void ClearLiveReflowTransforms()
     {
         _liveReflowIndex = -1;
         _liveReflowRow = -1;
         _liveReflowItemId = Guid.Empty;
         _dragLayoutOrigins.Clear();
-        foreach (var element in ItemsPanel.Children.OfType<FrameworkElement>().Where(element => element.Tag is DesktopItem))
+        foreach (var element in ItemsPanel.Children
+                     .OfType<FrameworkElement>()
+                     .Where(element => element.Tag is DesktopItem))
         {
             element.RenderTransform = null;
         }
     }
 
-    private void ShowDropIndicator(DropPlacement placement)
+    private static void SpringTransformHome(FrameworkElement element)
     {
-        if (_dropIndicatorIndex == placement.Index)
+        if (element.RenderTransform is not TranslateTransform translation)
         {
             return;
         }
 
-        _dropIndicatorIndex = placement.Index;
-
-        double left;
-        double top;
-        double width;
-        double height;
-        if (placement.Target is null)
+        var fromX = translation.X;
+        var fromY = translation.Y;
+        if (Math.Abs(fromX) < 0.1 && Math.Abs(fromY) < 0.1)
         {
-            left = 12;
-            top = 14;
-            width = Math.Max(24, BodyArea.ActualWidth - 24);
-            height = 3;
-        }
-        else
-        {
-            var origin = placement.Target.TranslatePoint(new Point(), BodyArea);
-            if (Model.ViewMode == "List")
-            {
-                left = 10;
-                top = origin.Y + (placement.PlaceAfter ? placement.Target.ActualHeight : 0) - 1.5;
-                width = Math.Max(24, BodyArea.ActualWidth - 20);
-                height = 3;
-            }
-            else
-            {
-                left = origin.X + (placement.PlaceAfter ? placement.Target.ActualWidth : 0) - 1.5;
-                top = origin.Y + 6;
-                width = 3;
-                height = Math.Max(24, placement.Target.ActualHeight - 12);
-            }
+            element.RenderTransform = null;
+            return;
         }
 
-        DropIndicator.Width = width;
-        DropIndicator.Height = height;
-        AnimateIndicatorPosition(Canvas.LeftProperty, left);
-        AnimateIndicatorPosition(Canvas.TopProperty, top);
-        DropIndicator.Visibility = Visibility.Visible;
-        DropIndicator.BeginAnimation(OpacityProperty, new DoubleAnimation(0.5, 1, TimeSpan.FromMilliseconds(420))
-        {
-            AutoReverse = true,
-            RepeatBehavior = RepeatBehavior.Forever
-        });
-    }
-
-    private void AnimateIndicatorPosition(DependencyProperty property, double target)
-    {
-        var current = (double)DropIndicator.GetValue(property);
-        if (double.IsNaN(current))
-        {
-            current = target;
-        }
-
-        DropIndicator.BeginAnimation(property, null);
-        DropIndicator.SetValue(property, target);
-        DropIndicator.BeginAnimation(property, new DoubleAnimation(current, target, TimeSpan.FromMilliseconds(42))
-        {
-            FillBehavior = FillBehavior.Stop
-        });
+        var duration = TimeSpan.FromMilliseconds(230);
+        AnimateAxis(translation, TranslateTransform.XProperty, fromX, 0, duration, 0.3, null);
+        AnimateAxis(translation, TranslateTransform.YProperty, fromY, 0, duration, 0.3, null);
     }
 
     internal void ClearDragPreview()
     {
-        HideDropIndicator();
+        EndLiveReflow();
         ClearFolderDropTarget();
-    }
-
-    private void HideDropIndicator()
-    {
-        _dragTrackingTimer.Stop();
-        _activeDragPayload = null;
-        _dropIndicatorIndex = -1;
-        ResetLiveItemReflow();
-        DropIndicator.BeginAnimation(OpacityProperty, null);
-        DropIndicator.Opacity = 0;
-        DropIndicator.Visibility = Visibility.Collapsed;
     }
 
     private void OnDrop(object sender, DragEventArgs e)
     {
-        HideDropIndicator();
         if (e.Data.GetData(InternalItemFormat) is ItemDragPayload payload)
         {
             var placement = GetItemDropPlacement(e);
-            ItemMoveRequested?.Invoke(this, new ItemMoveEventArgs(payload, placement.Index));
+            var move = new ItemMoveEventArgs(payload, placement.Index);
+            _dropCommitted = true;
+            // Stop following the pointer but keep the reflowed layout so the preview can land
+            // in the open slot before the model reorder rebuilds the tiles.
+            EndReflowTracking();
+
+            var settleCenter = GetSlotCenterScreenPoint(_lastGapSlotPoint)
+                               ?? GetCursorCenterFallback();
+            if (LiveItemDragSession.SettlePending && LiveItemDragSession.RequestSettle is { } settle)
+            {
+                LiveItemDragSession.SettleCompleted = () => ItemMoveRequested?.Invoke(this, move);
+                settle(settleCenter);
+            }
+            else
+            {
+                EndLiveReflow();
+                ItemMoveRequested?.Invoke(this, move);
+            }
+
             e.Handled = true;
             return;
         }
@@ -1761,6 +2004,34 @@ public partial class ZoneCard : UserControl
             e.Handled = true;
         }
     }
+
+    private Point? GetSlotCenterScreenPoint(Point slotInPanel)
+    {
+        try
+        {
+            var dpi = VisualTreeHelper.GetDpi(this);
+            var tileSize = LiveItemDragSession.TileSize;
+            var center = new Point(slotInPanel.X + tileSize.Width / 2, slotInPanel.Y + tileSize.Height / 2);
+            var screen = ItemsPanel.PointToScreen(center);
+            return new Point(screen.X / dpi.DpiScaleX, screen.Y / dpi.DpiScaleY);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    private Point GetCursorCenterFallback()
+    {
+        var dpi = VisualTreeHelper.GetDpi(this);
+        if (NativeMethods.GetCursorPos(out var cursor))
+        {
+            return new Point(cursor.X / dpi.DpiScaleX, cursor.Y / dpi.DpiScaleY);
+        }
+
+        return new Point(ActualWidth / 2, ActualHeight / 2);
+    }
+
 
     private readonly record struct ItemLayoutSlot(int Index, FrameworkElement Element, Point Origin);
 

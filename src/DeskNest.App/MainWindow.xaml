@@ -113,6 +113,7 @@
         </Border>
 
         <Canvas x:Name="ToolbarRocketCanvas" IsHitTestVisible="False" />
+        <Canvas x:Name="DragGhostCanvas" IsHitTestVisible="False" />
 
         <Border x:Name="StatusBorder" HorizontalAlignment="Center" VerticalAlignment="Center"
                 Padding="13,7" CornerRadius="10"
