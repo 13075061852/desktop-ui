@@ -528,6 +528,7 @@ public partial class MainWindow : System.Windows.Window
     {
         UpdateAlignmentGuides(null, null);
         DesktopCanvas.Children.Clear();
+        _zoneCardMap.Clear();
         var lightTheme = IsLightTheme();
 
         foreach (var zone in _state.Zones)
@@ -542,7 +543,11 @@ public partial class MainWindow : System.Windows.Window
             card.AlignmentGuidesChanged = UpdateAlignmentGuides;
             card.DragPreviewActivated = ClearDragPreviewsExcept;
             card.DragPreviewEnded = ClearAllDragPreviews;
-            card.ModelChanged += (_, _) => RequestSave();
+            card.ModelChanged += (_, _) =>
+            {
+                UpdateZoneSplitters();
+                RequestSave();
+            };
             card.DeleteRequested += (_, _) => DeleteZone(zone);
             card.NewFileRequested += (_, _) => CreateFileInZone(zone);
             card.NewFolderRequested += (_, _) => CreateFolderInZone(zone);
@@ -569,11 +574,21 @@ public partial class MainWindow : System.Windows.Window
             Canvas.SetLeft(card, Math.Max(ZoneCard.HorizontalDesktopInset, zone.X));
             Canvas.SetTop(card, Math.Max(72, zone.Y));
             DesktopCanvas.Children.Add(card);
+            _zoneCardMap[zone.Id] = card;
         }
 
         DesktopCanvas.Visibility = _state.DesktopIconsHidden
             ? Visibility.Visible
             : Visibility.Collapsed;
+        ZoneSplitterCanvas.Visibility = DesktopCanvas.Visibility;
+        if (ZoneSplitterCanvas.Visibility != Visibility.Visible)
+        {
+            ClearZoneSplitters();
+        }
+        else
+        {
+            UpdateZoneSplitters();
+        }
         ApplyThemeSurface(lightTheme);
     }
 
@@ -668,6 +683,8 @@ public partial class MainWindow : System.Windows.Window
                 card.RefreshItems();
             }
         }
+
+        UpdateZoneSplitters();
     }
 
     private void UpdateAlignmentGuides(double? verticalGuide, double? horizontalGuide)

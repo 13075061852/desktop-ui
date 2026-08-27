@@ -18,6 +18,7 @@
                IsHitTestVisible="False" Opacity="0" Visibility="Collapsed"
                RenderOptions.BitmapScalingMode="LowQuality" />
         <Canvas x:Name="DesktopCanvas" Background="{x:Null}" />
+        <Canvas x:Name="ZoneSplitterCanvas" />
         <Canvas x:Name="AlignmentGuideCanvas" IsHitTestVisible="False">
             <Line x:Name="VerticalAlignmentGuide" Visibility="Collapsed"
                   Stroke="{StaticResource AccentBrush}" StrokeThickness="1"
