@@ -371,6 +371,7 @@ public partial class MainWindow : System.Windows.Window
         _state = await _stateStore.LoadAsync();
         var startupConfigured = _startupService.Apply(_state.LaunchAtStartup);
         var shellItemsAdded = EnsureSystemShellItems();
+        var desktopMappingsAdded = AddUnmappedDesktopItems();
         if (!string.IsNullOrWhiteSpace(_state.WallpaperSelection))
         {
             _wallpaperService.ApplySelection(_state.WallpaperSelection);
@@ -408,7 +409,7 @@ public partial class MainWindow : System.Windows.Window
         {
             _iconVisibility.SetVisible(false);
         }
-        if (layoutAdjusted || shellItemsAdded)
+        if (layoutAdjusted || shellItemsAdded || desktopMappingsAdded > 0)
         {
             RequestSave();
         }
@@ -708,7 +709,7 @@ public partial class MainWindow : System.Windows.Window
         return true;
     }
 
-    private void OrganizeDesktop(bool showNotification)
+    private int AddUnmappedDesktopItems()
     {
         var scanner = new DesktopScanner(_classifier);
         var scannedItems = scanner.ScanDefaultDesktops();
@@ -737,6 +738,12 @@ public partial class MainWindow : System.Windows.Window
             added++;
         }
 
+        return added;
+    }
+
+    private void OrganizeDesktop(bool showNotification)
+    {
+        var added = AddUnmappedDesktopItems();
         RenderZones();
         RequestSave();
         var message = added == 0 ? "桌面映射已是最新状态" : $"已新增 {added} 个安全映射";
@@ -1408,6 +1415,15 @@ public partial class MainWindow : System.Windows.Window
     private void RefreshVisibleItems()
     {
         _iconService.Invalidate();
+        var added = AddUnmappedDesktopItems();
+        if (added > 0)
+        {
+            RenderZones();
+            RequestSave();
+            ShowStatus($"已自动映射 {added} 个桌面项目");
+            return;
+        }
+
         foreach (var card in DesktopCanvas.Children.OfType<ZoneCard>())
         {
             card.RefreshItems();

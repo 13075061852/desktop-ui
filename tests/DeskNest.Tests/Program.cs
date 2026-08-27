@@ -42,6 +42,30 @@ var tests = new List<(string Name, Action Run)>
         Assert.Equal(true, recycleBin.Exists);
         Assert.Equal("回收站", recycleBin.DisplayName);
     }),
+    ("desktop scanner includes every visible direct desktop item", () =>
+    {
+        var root = Path.Combine(Path.GetTempPath(), "DeskNestTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var visibleFile = Path.Combine(root, "visible.txt");
+        var visibleFolder = Path.Combine(root, "visible-folder");
+        var hiddenFile = Path.Combine(root, "hidden.txt");
+        File.WriteAllText(visibleFile, string.Empty);
+        Directory.CreateDirectory(visibleFolder);
+        File.WriteAllText(hiddenFile, string.Empty);
+        File.SetAttributes(hiddenFile, FileAttributes.Hidden);
+        try
+        {
+            var items = new DesktopScanner(new RuleClassifier()).Scan([root]);
+            Assert.SequenceEqual(
+                new[] { visibleFile, visibleFolder }.OrderBy(path => path, StringComparer.OrdinalIgnoreCase),
+                items.Select(item => item.Path).OrderBy(path => path, StringComparer.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            File.SetAttributes(hiddenFile, FileAttributes.Normal);
+            Directory.Delete(root, recursive: true);
+        }
+    }),
     ("item ordering repositions an item inside the same zone", () =>
     {
         var first = new DesktopItem { DisplayName = "A" };
