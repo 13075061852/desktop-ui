@@ -7,6 +7,8 @@ internal static class NativeMethods
     internal const uint WmSpawnWorker = 0x052C;
     internal const uint SpiGetDesktopWallpaper = 0x0073;
     internal const uint SpiSetDesktopWallpaper = 0x0014;
+    internal const uint ShcneUpdatedir = 0x00001000;
+    internal const uint ShcnfPathW = 0x0005;
     internal const uint SpifUpdateIniFile = 0x0001;
     internal const uint SpifSendChange = 0x0002;
     internal const int WmActivateApp = 0x001C;
@@ -201,6 +203,13 @@ internal static class NativeMethods
         int desiredWidth,
         int desiredHeight,
         uint loadFlags);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    internal static extern void SHChangeNotify(
+        uint eventId,
+        uint flags,
+        [MarshalAs(UnmanagedType.LPWStr)] string? path,
+        nint otherPath);
 
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     [return: MarshalAs(UnmanagedType.Bool)]

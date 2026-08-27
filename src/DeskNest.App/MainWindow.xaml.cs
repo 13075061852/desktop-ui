@@ -877,6 +877,20 @@ public partial class MainWindow : System.Windows.Window
             : fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 
+    private static void NotifyShellDirectoriesChanged(params string?[] directories)
+    {
+        foreach (var directory in directories
+                     .Where(path => !string.IsNullOrWhiteSpace(path))
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            NativeMethods.SHChangeNotify(
+                NativeMethods.ShcneUpdatedir,
+                NativeMethods.ShcnfPathW,
+                directory,
+                0);
+        }
+    }
+
     private void OrganizeDesktop(bool showNotification)
     {
         var added = AddUnmappedDesktopItems();
@@ -1132,6 +1146,7 @@ public partial class MainWindow : System.Windows.Window
                         File.Move(source, destination);
                     }
 
+                    NotifyShellDirectoriesChanged(sourceParent, Path.GetDirectoryName(destination));
                     moved++;
                 }
                 catch (IOException)
@@ -1235,6 +1250,8 @@ public partial class MainWindow : System.Windows.Window
                 {
                     File.Move(source, destination);
                 }
+
+                NotifyShellDirectoriesChanged(sourceParent, Path.GetDirectoryName(destination));
             }
             catch (IOException)
             {
