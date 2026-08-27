@@ -6,6 +6,9 @@ public sealed class DesktopItem
 {
     public const string RecycleBinShellPath = "shell:RecycleBinFolder";
     public const string ThisPcShellPath = "shell:MyComputerFolder";
+    public const string NetworkShellPath = "shell:NetworkPlacesFolder";
+    public const string ControlPanelShellPath = "shell:ControlPanelFolder";
+    public const string UserFilesShellPath = "shell:Personal";
 
     public Guid Id { get; set; } = Guid.NewGuid();
 
@@ -19,7 +22,8 @@ public sealed class DesktopItem
     public bool Exists => IsShellLocation(Path) || File.Exists(Path) || Directory.Exists(Path);
 
     public static bool IsShellLocation(string path) =>
-        path.StartsWith("shell:", StringComparison.OrdinalIgnoreCase);
+        path.StartsWith("shell:", StringComparison.OrdinalIgnoreCase) ||
+        path.StartsWith("::", StringComparison.OrdinalIgnoreCase);
 
     public static DesktopItem FromShellLocation(
         string shellPath,

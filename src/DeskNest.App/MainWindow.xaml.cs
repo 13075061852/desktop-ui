@@ -684,55 +684,111 @@ public partial class MainWindow : System.Windows.Window
 
     private bool EnsureSystemShellItems()
     {
-        var target = _state.Zones.FirstOrDefault(zone =>
-                         zone.Name.Contains("系统工具", StringComparison.OrdinalIgnoreCase))
-                     ?? _state.Zones.FirstOrDefault(zone => zone.CategoryKey == "other")
-                     ?? _state.Zones.FirstOrDefault();
-        if (target is null)
+        var fallbackTarget = _state.Zones.FirstOrDefault(zone =>
+                                zone.Name.Contains("系统工具", StringComparison.OrdinalIgnoreCase))
+                            ?? _state.Zones.FirstOrDefault(zone => zone.CategoryKey == "other")
+                            ?? _state.Zones.FirstOrDefault();
+        if (fallbackTarget is null)
         {
             return false;
         }
 
-        var added = false;
-        if (!HasShellItem(DesktopItem.RecycleBinShellPath))
+        var changed = false;
+        var shellScanner = new DesktopShellScanner();
+        var shellItems = shellScanner.Scan();
+        if (shellScanner.LastScanSucceeded)
         {
+            var staleShellItems = _state.Zones
+                .SelectMany(zone => zone.Items.Select(item => (Zone: zone, Item: item)))
+                .Where(entry => DesktopItem.IsShellLocation(entry.Item.Path))
+                .Where(entry => !shellItems.Any(shellItem => HasEquivalentShellItem(entry.Item, shellItem)))
+                .ToArray();
+            foreach (var staleShellItem in staleShellItems)
+            {
+                staleShellItem.Zone.Items.Remove(staleShellItem.Item);
+                changed = true;
+            }
+        }
+        else if (shellItems.Count == 0)
+        {
+            // Keep the recycle bin available if a shell enumeration is temporarily unavailable.
+            shellItems =
+            [
+                new ShellDesktopItem(DesktopItem.RecycleBinShellPath, "回收站", "other")
+            ];
+        }
+
+        foreach (var shellItem in shellItems)
+        {
+            if (HasEquivalentShellItem(shellItem))
+            {
+                continue;
+            }
+
+            var target = _state.Zones.FirstOrDefault(zone => zone.CategoryKey == shellItem.CategoryKey)
+                         ?? fallbackTarget;
             target.Items.Add(DesktopItem.FromShellLocation(
-                DesktopItem.RecycleBinShellPath,
-                "回收站",
+                shellItem.Path,
+                shellItem.DisplayName,
                 target.CategoryKey));
-            added = true;
+            changed = true;
         }
 
-        if (IsDesktopShellIconVisible("{20D04FE0-3AEA-1069-A2D8-08002B30309D}") &&
-            !HasShellItem(DesktopItem.ThisPcShellPath))
-        {
-            var folderTarget = _state.Zones.FirstOrDefault(zone => zone.CategoryKey == "folders") ?? target;
-            folderTarget.Items.Add(DesktopItem.FromShellLocation(
-                DesktopItem.ThisPcShellPath,
-                "此电脑",
-                folderTarget.CategoryKey));
-            added = true;
-        }
-
-        return added;
+        return changed;
     }
 
-    private bool HasShellItem(string shellPath) => _state.Zones
+    private bool HasEquivalentShellItem(ShellDesktopItem shellItem) => _state.Zones
         .SelectMany(zone => zone.Items)
-        .Any(item => string.Equals(item.Path, shellPath, StringComparison.OrdinalIgnoreCase));
+        .Any(item => HasEquivalentShellItem(item, shellItem));
 
-    private static bool IsDesktopShellIconVisible(string clsid)
+    private static bool HasEquivalentShellItem(DesktopItem existingItem, ShellDesktopItem candidate)
     {
-        try
+        return string.Equals(existingItem.Path, candidate.Path, StringComparison.OrdinalIgnoreCase) ||
+               IsSameKnownShellItem(existingItem.Path, candidate.Path);
+    }
+
+    private static bool IsSameKnownShellItem(string existingPath, string candidatePath)
+    {
+        var existingCanonical = CanonicalKnownShellPath(existingPath);
+        var candidateCanonical = CanonicalKnownShellPath(candidatePath);
+        return existingCanonical is not null &&
+               string.Equals(existingCanonical, candidateCanonical, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? CanonicalKnownShellPath(string path)
+    {
+        if (path.Contains("{20D04FE0-3AEA-1069-A2D8-08002B30309D}", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(path, DesktopItem.ThisPcShellPath, StringComparison.OrdinalIgnoreCase))
         {
-            using var key = Registry.CurrentUser.OpenSubKey(
-                @"Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel");
-            return key?.GetValue(clsid) is not int value || value == 0;
+            return DesktopItem.ThisPcShellPath;
         }
-        catch (Exception)
+
+        if (path.Contains("{645FF040-5081-101B-9F08-00AA002F954E}", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(path, DesktopItem.RecycleBinShellPath, StringComparison.OrdinalIgnoreCase))
         {
-            return true;
+            return DesktopItem.RecycleBinShellPath;
         }
+
+        if (path.Contains("{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(path, DesktopItem.NetworkShellPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return DesktopItem.NetworkShellPath;
+        }
+
+        if (path.Contains("{5399E694-6CE5-4D6C-8FCE-1D8870FDCBA0}", StringComparison.OrdinalIgnoreCase) ||
+            path.Contains("{26EE0668-A00A-44D7-9371-BEB064C98683}", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(path, DesktopItem.ControlPanelShellPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return DesktopItem.ControlPanelShellPath;
+        }
+
+        if (path.Contains("{59031A47-3F72-44A7-89C5-5595FE6B30EE}", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(path, DesktopItem.UserFilesShellPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return DesktopItem.UserFilesShellPath;
+        }
+
+        return null;
     }
 
     private int AddUnmappedDesktopItems()

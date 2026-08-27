@@ -13,7 +13,8 @@ internal sealed class ShellService
     {
         if (DesktopItem.IsShellLocation(path))
         {
-            return Start(new ProcessStartInfo("explorer.exe", path) { UseShellExecute = true });
+            var shellArgument = $"\"{path.Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
+            return Start(new ProcessStartInfo("explorer.exe", shellArgument) { UseShellExecute = true });
         }
 
         if (!File.Exists(path) && !Directory.Exists(path))
