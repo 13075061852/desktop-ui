@@ -189,6 +189,46 @@ public partial class ZoneCard : UserControl
         RenderItems();
     }
 
+    internal void PlayItemAddedHighlight(Guid itemId)
+    {
+        var itemElement = ItemsPanel.Children
+            .OfType<Border>()
+            .FirstOrDefault(element => element.Tag is DesktopItem item && item.Id == itemId);
+        if (itemElement is null || ColorConverter.ConvertFromString(Model.AccentColor) is not Color accent)
+        {
+            return;
+        }
+
+        var background = new SolidColorBrush(Color.FromArgb(0, accent.R, accent.G, accent.B));
+        var border = new SolidColorBrush(Color.FromArgb(0, accent.R, accent.G, accent.B));
+        itemElement.Background = background;
+        itemElement.BorderBrush = border;
+        itemElement.BorderThickness = new Thickness(1);
+
+        var backgroundAnimation = CreateItemHighlightAnimation(accent, 58);
+        var borderAnimation = CreateItemHighlightAnimation(accent, 220);
+        borderAnimation.Completed += (_, _) =>
+        {
+            Dispatcher.BeginInvoke(() => ApplyItemSurfaceVisual(itemElement, itemElement.IsMouseOver));
+        };
+        background.BeginAnimation(SolidColorBrush.ColorProperty, backgroundAnimation);
+        border.BeginAnimation(SolidColorBrush.ColorProperty, borderAnimation);
+    }
+
+    private static ColorAnimationUsingKeyFrames CreateItemHighlightAnimation(Color accent, byte peakAlpha)
+    {
+        var animation = new ColorAnimationUsingKeyFrames
+        {
+            Duration = TimeSpan.FromMilliseconds(900),
+            FillBehavior = FillBehavior.Stop
+        };
+        animation.KeyFrames.Add(new LinearColorKeyFrame(Color.FromArgb(0, accent.R, accent.G, accent.B), KeyTime.FromTimeSpan(TimeSpan.Zero)));
+        animation.KeyFrames.Add(new LinearColorKeyFrame(Color.FromArgb(peakAlpha, accent.R, accent.G, accent.B), KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(110))));
+        animation.KeyFrames.Add(new LinearColorKeyFrame(Color.FromArgb((byte)(peakAlpha * 0.35), accent.R, accent.G, accent.B), KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(430))));
+        animation.KeyFrames.Add(new LinearColorKeyFrame(Color.FromArgb(0, accent.R, accent.G, accent.B), KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(900))));
+        return animation;
+    }
+
     internal void RevealItem(Guid itemId)
     {
         if (Model.IsCollapsed)

@@ -1683,6 +1683,11 @@ public partial class MainWindow : System.Windows.Window
             }
 
             card.PlayMappingAddedHighlight();
+            foreach (var addition in group)
+            {
+                card.PlayItemAddedHighlight(addition.Item.Id);
+            }
+
             card.RevealItem(group.Last().Item.Id);
         }
     }
