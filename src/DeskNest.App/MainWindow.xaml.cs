@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Windows;
@@ -28,7 +29,9 @@ public partial class MainWindow : System.Windows.Window
     private readonly JsonStateStore _stateStore = new();
     private readonly RuleClassifier _classifier = new();
     private readonly ShellIconService _iconService = new();
+    private readonly Dictionary<string, BitmapImage> _wallpaperBitmapCache = new(StringComparer.OrdinalIgnoreCase);
     private int _toolbarFlightVersion;
+    private int _wallpaperPreviewVersion;
     private bool? _appliedLightTheme;
     private readonly ShellService _shellService = new();
     private readonly DesktopHostService _desktopHost = new();
@@ -497,7 +500,7 @@ public partial class MainWindow : System.Windows.Window
             () => Dispatcher.Invoke(ToggleDesktopMode),
             () => Dispatcher.Invoke(ExitApplication));
         _ = TrimWorkingSetAfterStartupAsync();
-        // Wallpaper changes are handed directly to Windows; no custom image transition is used.
+        _ = PreloadWallpaperBitmapsAsync();
 
         if (isFirstRun)
         {
@@ -554,6 +557,7 @@ public partial class MainWindow : System.Windows.Window
             card.ItemRenameRequested += (_, args) => RenameItem(zone, args.Item);
             card.ItemRevealRequested += (_, args) => RevealItem(args.Item);
             card.ItemPropertiesRequested += (_, args) => ShowItemProperties(args.Item);
+            card.ItemEmptyRecycleBinRequested += (_, args) => EmptyRecycleBin(args.Item);
             card.ItemDeleteRequested += (_, args) => DeleteItem(zone, args.Item);
             card.ItemRemoveRequested += (_, args) => RemoveItem(zone, args.Item);
             if (_selectedZoneId == zone.Id)
@@ -1531,6 +1535,37 @@ public partial class MainWindow : System.Windows.Window
         }
     }
 
+    private void EmptyRecycleBin(DesktopItem item)
+    {
+        if (_shellService.IsRecycleBinEmpty() == true)
+        {
+            ShowStatus("回收站已经是干净的状态了");
+            return;
+        }
+
+        var result = System.Windows.MessageBox.Show(
+            this,
+            "确定要清空回收站吗？其中的项目将被永久删除。",
+            "清空回收站",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+        if (result != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        if (!_shellService.EmptyRecycleBin())
+        {
+            ShowStatus("回收站清空失败");
+            return;
+        }
+
+        _iconService.Invalidate();
+        RefreshVisibleItems();
+        ShowStatus("回收站已清空");
+    }
+
     private void DeleteItem(ZoneModel zone, DesktopItem item)
     {
         if (!item.Exists)
@@ -2100,7 +2135,119 @@ public partial class MainWindow : System.Windows.Window
     private bool ApplyWallpaperImmediately(string? selection)
     {
         var targetPath = _wallpaperService.ResolveSelection(selection);
-        return targetPath is not null && _wallpaperService.ApplyPath(targetPath);
+        if (targetPath is null)
+        {
+            return false;
+        }
+
+        BitmapImage targetBitmap;
+        try
+        {
+            if (!_wallpaperBitmapCache.TryGetValue(targetPath, out targetBitmap!))
+            {
+                targetBitmap = LoadWallpaperBitmap(targetPath);
+                _wallpaperBitmapCache[targetPath] = targetBitmap;
+            }
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            return false;
+        }
+
+        // Explorer can take a few frames to repaint after SPI_SETDESKWALLPAPER. Put the new
+        // frame on our desktop layer first, then let the native wallpaper update run at a lower
+        // dispatcher priority. This makes the click appear immediate without blocking WPF's UI.
+        var previewVersion = ++_wallpaperPreviewVersion;
+        WallpaperPreviewImage.BeginAnimation(OpacityProperty, null);
+        WallpaperPreviewImage.Source = targetBitmap;
+        WallpaperPreviewImage.Opacity = 1;
+        WallpaperPreviewImage.Visibility = Visibility.Visible;
+
+        Dispatcher.BeginInvoke(
+            DispatcherPriority.Background,
+            new Action(() => _ = CommitWallpaperPreviewAsync(targetPath, previewVersion)));
+        return true;
+    }
+
+    private async Task CommitWallpaperPreviewAsync(string targetPath, int previewVersion)
+    {
+        if (previewVersion != _wallpaperPreviewVersion)
+        {
+            return;
+        }
+
+        if (!_wallpaperService.ApplyPath(targetPath))
+        {
+            ClearWallpaperPreview(previewVersion);
+            ShowStatus("背景图片暂时无法应用");
+            return;
+        }
+
+        // Keep the preview until Windows reports the same path. The bounded wait prevents a
+        // slow Explorer refresh from exposing the old wallpaper, while still releasing the
+        // extra compositing layer when the native handoff is complete.
+        for (var attempt = 0; attempt < 16; attempt++)
+        {
+            await Task.Delay(75);
+            if (previewVersion != _wallpaperPreviewVersion ||
+                string.Equals(_wallpaperService.GetCurrentWallpaperPath(), targetPath, StringComparison.OrdinalIgnoreCase))
+            {
+                break;
+            }
+        }
+
+        ClearWallpaperPreview(previewVersion);
+    }
+
+    private void ClearWallpaperPreview(int previewVersion)
+    {
+        if (previewVersion != _wallpaperPreviewVersion)
+        {
+            return;
+        }
+
+        WallpaperPreviewImage.BeginAnimation(OpacityProperty, null);
+        WallpaperPreviewImage.Source = null;
+        WallpaperPreviewImage.Opacity = 0;
+        WallpaperPreviewImage.Visibility = Visibility.Collapsed;
+    }
+
+    private async Task PreloadWallpaperBitmapsAsync()
+    {
+        foreach (var option in _wallpaperService.GetBuiltInOptions())
+        {
+            var path = _wallpaperService.ResolveSelection(option.Key);
+            if (path is null || _wallpaperBitmapCache.ContainsKey(path))
+            {
+                continue;
+            }
+
+            try
+            {
+                var bitmap = await Task.Run(() => LoadWallpaperBitmap(path));
+                if (!_wallpaperBitmapCache.ContainsKey(path))
+                {
+                    _wallpaperBitmapCache[path] = bitmap;
+                }
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+            {
+                // A missing optional built-in wallpaper should not affect application startup.
+            }
+        }
+    }
+
+    private static BitmapImage LoadWallpaperBitmap(string path)
+    {
+        var bitmap = new BitmapImage();
+        bitmap.BeginInit();
+        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+        bitmap.UriSource = new Uri(Path.GetFullPath(path), UriKind.Absolute);
+        bitmap.EndInit();
+        bitmap.Freeze();
+        return bitmap;
     }
 
     private void PreviewAppearance(bool animateToolbar)

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using DeskNest.App.Interop;
 using Microsoft.VisualBasic.FileIO;
 using DeskNest.Core.Models;
 
@@ -47,6 +48,20 @@ internal sealed class ShellService
 
     public bool ShowProperties(string path)
     {
+        if (DesktopItem.IsShellLocation(path))
+        {
+            // Shell namespace items (This PC, Recycle Bin, etc.) do not have a file-system
+            // path, so ProcessStartInfo(path) cannot invoke their Properties verb.
+            var result = NativeMethods.ShellExecute(
+                0,
+                "properties",
+                path,
+                null,
+                null,
+                NativeMethods.SwShowNormal);
+            return result.ToInt64() > 32;
+        }
+
         if (!File.Exists(path) && !Directory.Exists(path))
         {
             return false;
@@ -57,6 +72,26 @@ internal sealed class ShellService
             UseShellExecute = true,
             Verb = "properties"
         });
+    }
+
+    public bool? IsRecycleBinEmpty()
+    {
+        var info = new NativeMethods.ShQueryRecycleBinInfo
+        {
+            Size = (uint)Marshal.SizeOf<NativeMethods.ShQueryRecycleBinInfo>()
+        };
+        var result = NativeMethods.SHQueryRecycleBin(null, ref info);
+        return result == 0 ? info.ItemCount == 0 : null;
+    }
+
+    public bool EmptyRecycleBin()
+    {
+        // The confirmation is handled by the app menu. Suppress only the duplicate native
+        // confirmation while preserving native error handling.
+        return NativeMethods.SHEmptyRecycleBin(
+            0,
+            null,
+            NativeMethods.SherbNoConfirmation) == 0;
     }
 
     public bool CreateShortcut(string shortcutPath, string targetPath)

@@ -8,6 +8,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
+using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using DeskNest.App.Interop;
@@ -62,6 +63,7 @@ public partial class ZoneCard : UserControl
 
     private readonly ShellIconService _iconService;
     private readonly DispatcherTimer _dragTrackingTimer;
+    private readonly Dictionary<FrameworkElement, Point> _dragLayoutOrigins = new();
 
     private Point _headerDragStart;
     private Point _itemDragStart;
@@ -75,6 +77,7 @@ public partial class ZoneCard : UserControl
     private int _liveReflowRow = -1;
     private Guid _liveReflowItemId;
     private Guid? _selectedItemId;
+    private Guid? _folderDropTargetId;
     private double _modelStartX;
     private double _modelStartY;
     private ZoneBounds _resizeStartBounds;
@@ -135,6 +138,7 @@ public partial class ZoneCard : UserControl
     internal event EventHandler<ItemActionEventArgs>? ItemRenameRequested;
     internal event EventHandler<ItemActionEventArgs>? ItemRevealRequested;
     internal event EventHandler<ItemActionEventArgs>? ItemPropertiesRequested;
+    internal event EventHandler<ItemActionEventArgs>? ItemEmptyRecycleBinRequested;
     internal event EventHandler<ItemActionEventArgs>? ItemDeleteRequested;
     internal event EventHandler<ItemActionEventArgs>? ItemRemoveRequested;
 
@@ -323,6 +327,7 @@ public partial class ZoneCard : UserControl
 
     private void RenderItems()
     {
+        _dragLayoutOrigins.Clear();
         ItemsPanel.Children.Clear();
         var iconTileWidth = Math.Max(76, _iconSize + 34);
         var listTileWidth = Math.Max(120, Model.Width - 28);
@@ -433,6 +438,7 @@ public partial class ZoneCard : UserControl
         if (border.AllowDrop)
         {
             border.DragOver += OnFolderDragOver;
+            border.DragLeave += OnFolderDragLeave;
             border.Drop += OnFolderDrop;
         }
 
@@ -449,7 +455,26 @@ public partial class ZoneCard : UserControl
 
     private void ApplyItemSurfaceVisual(Border border, bool isHovered)
     {
-        var isSelected = border.Tag is DesktopItem item && _selectedItemId == item.Id;
+        var item = border.Tag as DesktopItem;
+        var isFolderDropTarget = item is not null && _folderDropTargetId == item.Id;
+        if (isFolderDropTarget)
+        {
+            border.Background = new SolidColorBrush(_lightTheme
+                ? Color.FromArgb(78, 40, 154, 137)
+                : Color.FromArgb(88, 118, 215, 196));
+            border.BorderBrush = (Brush)FindResource("AccentBrush");
+            border.BorderThickness = new Thickness(2);
+            border.Effect = new DropShadowEffect
+            {
+                BlurRadius = 14,
+                ShadowDepth = 0,
+                Opacity = 0.82,
+                Color = Color.FromRgb(118, 215, 196)
+            };
+            return;
+        }
+
+        var isSelected = item is not null && _selectedItemId == item.Id;
         if (isSelected)
         {
             border.Background = new SolidColorBrush(_lightTheme
@@ -457,12 +482,55 @@ public partial class ZoneCard : UserControl
                 : Color.FromArgb(62, 118, 215, 196));
             border.BorderBrush = (Brush)FindResource("AccentBrush");
             border.BorderThickness = new Thickness(1);
+            border.Effect = null;
             return;
         }
 
         border.Background = isHovered ? (Brush)FindResource("PanelHoverBrush") : Brushes.Transparent;
         border.BorderBrush = Brushes.Transparent;
         border.BorderThickness = new Thickness(1);
+        border.Effect = null;
+    }
+
+    private void SetFolderDropTarget(Guid? itemId)
+    {
+        if (_folderDropTargetId == itemId)
+        {
+            return;
+        }
+
+        _folderDropTargetId = itemId;
+        foreach (var border in ItemsPanel.Children
+                     .OfType<Border>()
+                     .Where(element => element.Tag is DesktopItem))
+        {
+            ApplyItemSurfaceVisual(border, border.IsMouseOver);
+        }
+    }
+
+    private void ClearFolderDropTarget()
+    {
+        SetFolderDropTarget(null);
+    }
+
+    private bool IsPointerOverFolderDropTarget(Point cardPoint)
+    {
+        if (_folderDropTargetId is not Guid targetId)
+        {
+            return false;
+        }
+
+        var border = ItemsPanel.Children
+            .OfType<Border>()
+            .FirstOrDefault(element => element.Tag is DesktopItem item && item.Id == targetId);
+        if (border is null || !border.IsVisible)
+        {
+            return false;
+        }
+
+        var bounds = border.TransformToAncestor(this)
+            .TransformBounds(new Rect(0, 0, border.ActualWidth, border.ActualHeight));
+        return bounds.Contains(cardPoint);
     }
 
     private ContextMenu BuildItemContextMenu(DesktopItem item)
@@ -473,6 +541,24 @@ public partial class ZoneCard : UserControl
         menu.Items.Add(open);
         if (DesktopItem.IsShellLocation(item.Path))
         {
+            if (string.Equals(item.Path, DesktopItem.RecycleBinShellPath, StringComparison.OrdinalIgnoreCase))
+            {
+                var emptyRecycleBin = new MenuItem { Header = "清空回收站" };
+                emptyRecycleBin.Click += (_, _) => ItemEmptyRecycleBinRequested?.Invoke(
+                    this,
+                    new ItemActionEventArgs(item));
+                menu.Items.Add(emptyRecycleBin);
+                menu.Items.Add(new Separator());
+            }
+
+            var shellProperties = new MenuItem { Header = "属性" };
+            shellProperties.Click += (_, _) => ItemPropertiesRequested?.Invoke(this, new ItemActionEventArgs(item));
+            menu.Items.Add(shellProperties);
+            menu.Items.Add(new Separator());
+
+            var shellRemove = new MenuItem { Header = "移出分区（不删除项目）" };
+            shellRemove.Click += (_, _) => ItemRemoveRequested?.Invoke(this, new ItemActionEventArgs(item));
+            menu.Items.Add(shellRemove);
             return RegisterTransientMenu(menu);
         }
 
@@ -1062,28 +1148,15 @@ public partial class ZoneCard : UserControl
     private void StartDragPreview(DesktopItem item, FrameworkElement sourceElement)
     {
         _dragSourceElement = sourceElement;
-        sourceElement.Opacity = 0.18;
 
-        var iconSize = Math.Clamp(_iconSize, 36, 54);
-        var content = new StackPanel();
-        content.Children.Add(new Image
-        {
-            Width = iconSize,
-            Height = iconSize,
-            Source = _iconService.GetIcon(item.Path),
-            Stretch = Stretch.Uniform,
-            HorizontalAlignment = HorizontalAlignment.Center
-        });
-        content.Children.Add(new TextBlock
-        {
-            Text = item.DisplayName,
-            MaxWidth = Math.Max(86, sourceElement.ActualWidth),
-            Margin = new Thickness(4, 5, 4, 0),
-            TextAlignment = TextAlignment.Center,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            Foreground = _lightTheme ? new SolidColorBrush(Color.FromRgb(27, 34, 46)) : Brushes.White,
-            FontSize = 11
-        });
+        // Render the actual tile instead of rebuilding an approximation. This keeps icon/list
+        // mode, icon size, label trimming, colors and spacing identical to the original item.
+        var pixelWidth = Math.Max(1, (int)Math.Ceiling(sourceElement.ActualWidth));
+        var pixelHeight = Math.Max(1, (int)Math.Ceiling(sourceElement.ActualHeight));
+        var snapshot = new RenderTargetBitmap(pixelWidth, pixelHeight, 96, 96, PixelFormats.Pbgra32);
+        snapshot.Render(sourceElement);
+        snapshot.Freeze();
+        sourceElement.Opacity = 0.18;
 
         _dragPreviewPopup = new Popup
         {
@@ -1093,23 +1166,19 @@ public partial class ZoneCard : UserControl
             StaysOpen = true,
             Child = new Border
             {
-                MinWidth = Math.Max(92, sourceElement.ActualWidth),
-                Padding = new Thickness(9),
-                CornerRadius = new CornerRadius(12),
-                Background = _headerBackground,
-                BorderBrush = (Brush)FindResource("AccentBrush"),
-                BorderThickness = new Thickness(1),
-                Opacity = 0.92,
-                Effect = new DropShadowEffect
+                Width = sourceElement.ActualWidth,
+                Height = sourceElement.ActualHeight,
+                Background = Brushes.Transparent,
+                BorderBrush = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Child = new Image
                 {
-                    BlurRadius = 20,
-                    ShadowDepth = 7,
-                    Opacity = 0.48,
-                    Color = Color.FromRgb(5, 8, 13)
-                },
-                RenderTransformOrigin = new Point(0.5, 0.5),
-                RenderTransform = new ScaleTransform(1.04, 1.04),
-                Child = content
+                    Width = sourceElement.ActualWidth,
+                    Height = sourceElement.ActualHeight,
+                    Source = snapshot,
+                    Stretch = Stretch.Fill,
+                    IsHitTestVisible = false
+                }
             }
         };
         UpdateDragPreviewPosition();
@@ -1178,11 +1247,31 @@ public partial class ZoneCard : UserControl
         if (paths.Length == 0 || sender is not FrameworkElement { Tag: DesktopItem folder } ||
             !Directory.Exists(folder.Path))
         {
+            ClearFolderDropTarget();
+            e.Effects = DragDropEffects.None;
+            e.Handled = true;
             return;
         }
 
+        SetFolderDropTarget(folder.Id);
         e.Effects = DragDropEffects.Move;
         e.Handled = true;
+    }
+
+    private void OnFolderDragLeave(object sender, DragEventArgs e)
+    {
+        if (sender is not FrameworkElement folderElement)
+        {
+            ClearFolderDropTarget();
+            return;
+        }
+
+        var point = e.GetPosition(folderElement);
+        if (point.X < 0 || point.Y < 0 ||
+            point.X > folderElement.ActualWidth || point.Y > folderElement.ActualHeight)
+        {
+            ClearFolderDropTarget();
+        }
     }
 
     private void OnFolderDrop(object sender, DragEventArgs e)
@@ -1191,9 +1280,11 @@ public partial class ZoneCard : UserControl
         if (paths.Length == 0 || sender is not FrameworkElement { Tag: DesktopItem folder } ||
             !Directory.Exists(folder.Path))
         {
+            ClearFolderDropTarget();
             return;
         }
 
+        ClearFolderDropTarget();
         FolderFilesDropped?.Invoke(this, new FolderFilesDroppedEventArgs(folder, paths));
         e.Handled = true;
     }
@@ -1288,6 +1379,11 @@ public partial class ZoneCard : UserControl
         if (point.X < 0 || point.Y < 0 || point.X > ActualWidth || point.Y > ActualHeight)
         {
             HideDropIndicator();
+            ClearFolderDropTarget();
+        }
+        else if (!IsPointerOverFolderDropTarget(point))
+        {
+            ClearFolderDropTarget();
         }
     }
 
@@ -1306,8 +1402,11 @@ public partial class ZoneCard : UserControl
         }
 
         // Use immutable layout slots. Animated elements never become hit-test boundaries.
+        // Keep hit-test geometry independent from the animated visual positions. Reading the
+        // current RenderTransform here makes fast vertical drags reclassify rows while items are
+        // still moving, which can produce an apparently random insertion point.
         var slots = itemElements
-            .Select((element, index) => new ItemLayoutSlot(index, element, GetLayoutOrigin(element)))
+            .Select((element, index) => new ItemLayoutSlot(index, element, GetDragLayoutOrigin(element)))
             .ToArray();
 
         if (Model.ViewMode == "List")
@@ -1430,7 +1529,7 @@ public partial class ZoneCard : UserControl
             return;
         }
 
-        var slots = elements.Select(GetLayoutOrigin).ToList();
+        var slots = elements.Select(GetDragLayoutOrigin).ToList();
         var sourceIndex = payload.SourceZoneId == Model.Id
             ? Array.FindIndex(elements, element => element.Tag is DesktopItem item && item.Id == payload.ItemId)
             : -1;
@@ -1474,6 +1573,18 @@ public partial class ZoneCard : UserControl
             origin.Y -= translation.Y;
         }
 
+        return origin;
+    }
+
+    private Point GetDragLayoutOrigin(FrameworkElement element)
+    {
+        if (_dragLayoutOrigins.TryGetValue(element, out var origin))
+        {
+            return origin;
+        }
+
+        origin = GetLayoutOrigin(element);
+        _dragLayoutOrigins[element] = origin;
         return origin;
     }
 
@@ -1528,9 +1639,10 @@ public partial class ZoneCard : UserControl
             return;
         }
 
-        translation.BeginAnimation(property, new DoubleAnimation(current, target, TimeSpan.FromMilliseconds(115))
+        // DragOver can arrive every 16 ms. A long eased animation gets restarted before it
+        // reaches its target, which makes fast vertical sorting feel like it is trailing behind.
+        translation.BeginAnimation(property, new DoubleAnimation(current, target, TimeSpan.FromMilliseconds(42))
         {
-            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
             FillBehavior = FillBehavior.Stop
         });
     }
@@ -1540,6 +1652,7 @@ public partial class ZoneCard : UserControl
         _liveReflowIndex = -1;
         _liveReflowRow = -1;
         _liveReflowItemId = Guid.Empty;
+        _dragLayoutOrigins.Clear();
         foreach (var element in ItemsPanel.Children.OfType<FrameworkElement>().Where(element => element.Tag is DesktopItem))
         {
             element.RenderTransform = null;
@@ -1607,14 +1720,17 @@ public partial class ZoneCard : UserControl
 
         DropIndicator.BeginAnimation(property, null);
         DropIndicator.SetValue(property, target);
-        DropIndicator.BeginAnimation(property, new DoubleAnimation(current, target, TimeSpan.FromMilliseconds(110))
+        DropIndicator.BeginAnimation(property, new DoubleAnimation(current, target, TimeSpan.FromMilliseconds(42))
         {
-            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
             FillBehavior = FillBehavior.Stop
         });
     }
 
-    internal void ClearDragPreview() => HideDropIndicator();
+    internal void ClearDragPreview()
+    {
+        HideDropIndicator();
+        ClearFolderDropTarget();
+    }
 
     private void HideDropIndicator()
     {

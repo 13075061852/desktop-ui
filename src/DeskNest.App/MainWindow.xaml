@@ -11,6 +11,12 @@
         Width="1600" Height="900"
         Left="0" Top="0">
     <Grid x:Name="RootGrid" Background="Transparent">
+        <!-- Keep a lightweight preview layer visible while Explorer redraws the native wallpaper. -->
+        <Image x:Name="WallpaperPreviewImage"
+               Stretch="UniformToFill"
+               HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+               IsHitTestVisible="False" Opacity="0" Visibility="Collapsed"
+               RenderOptions.BitmapScalingMode="LowQuality" />
         <Canvas x:Name="DesktopCanvas" Background="{x:Null}" />
         <Canvas x:Name="AlignmentGuideCanvas" IsHitTestVisible="False">
             <Line x:Name="VerticalAlignmentGuide" Visibility="Collapsed"

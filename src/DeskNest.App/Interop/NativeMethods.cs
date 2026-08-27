@@ -35,6 +35,8 @@ internal static class NativeMethods
     internal const uint SwpShowWindow = 0x0040;
     internal const int SwHide = 0;
     internal const int SwShow = 5;
+    internal const int SwShowNormal = 1;
+    internal const uint SherbNoConfirmation = 0x00000001;
     internal static readonly nint HwndBottom = 1;
 
     internal const uint ShgfiIcon = 0x000000100;
@@ -192,6 +194,34 @@ internal static class NativeMethods
         int imageList,
         ref Guid interfaceId,
         [MarshalAs(UnmanagedType.Interface)] out IImageList result);
+
+    [DllImport("shell32.dll", EntryPoint = "ShellExecuteW", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern nint ShellExecute(
+        nint window,
+        string? operation,
+        string file,
+        string? parameters,
+        string? directory,
+        int showCommand);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct ShQueryRecycleBinInfo
+    {
+        public uint Size;
+        public long RecycleBinSize;
+        public long ItemCount;
+    }
+
+    [DllImport("shell32.dll", EntryPoint = "SHQueryRecycleBinW", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern int SHQueryRecycleBin(
+        string? rootPath,
+        ref ShQueryRecycleBinInfo info);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern int SHEmptyRecycleBin(
+        nint window,
+        string? rootPath,
+        uint flags);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
