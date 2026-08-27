@@ -175,6 +175,10 @@
             </Grid>
         </Border>
 
+        <Border x:Name="MappingHighlight" IsHitTestVisible="False"
+                Margin="1" BorderBrush="{StaticResource AccentBrush}" BorderThickness="2"
+                CornerRadius="10" Opacity="0" Panel.ZIndex="5" />
+
         <Grid x:Name="ResizeLayer">
             <primitives:Thumb Tag="Left" Width="7" HorizontalAlignment="Left" Cursor="SizeWE"
                               Style="{StaticResource ResizeHandleStyle}" DragDelta="OnResizeDragDelta" />

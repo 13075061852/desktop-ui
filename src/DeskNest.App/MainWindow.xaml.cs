@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Interop;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -20,6 +21,8 @@ namespace DeskNest.App;
 
 public partial class MainWindow : System.Windows.Window
 {
+    private sealed record DesktopMappingAddition(ZoneModel Zone, DesktopItem Item);
+
     private const int DeleteHotKeyId = 0x444E;
 
     private readonly JsonStateStore _stateStore = new();
@@ -330,6 +333,11 @@ public partial class MainWindow : System.Windows.Window
 
     private bool IsInteractivePoint(Point point)
     {
+        if (_state.DesktopIconsHidden)
+        {
+            return true;
+        }
+
         if (ContainsPoint(ToolbarBorder, point))
         {
             return true;
@@ -338,6 +346,52 @@ public partial class MainWindow : System.Windows.Window
         return DesktopCanvas.Children
             .OfType<ZoneCard>()
             .Any(card => ContainsPoint(card, point));
+    }
+
+    private void OnDesktopPreviewRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_state.DesktopIconsHidden)
+        {
+            return;
+        }
+
+        var point = e.GetPosition(this);
+        if (ContainsPoint(ToolbarBorder, point) ||
+            DesktopCanvas.Children.OfType<ZoneCard>().Any(card => ContainsPoint(card, point)))
+        {
+            return;
+        }
+
+        var menu = new ContextMenu
+        {
+            Placement = PlacementMode.MousePoint,
+            StaysOpen = false
+        };
+        var newFile = new MenuItem { Header = "新建文件" };
+        newFile.Click += (_, _) => CreateInDesktopContext("documents", CreateFileInZone);
+        var newFolder = new MenuItem { Header = "新建文件夹" };
+        newFolder.Click += (_, _) => CreateInDesktopContext("folders", CreateFolderInZone);
+        var newShortcut = new MenuItem { Header = "新建快捷方式" };
+        newShortcut.Click += (_, _) => CreateInDesktopContext("apps", CreateShortcutInZone);
+        menu.Items.Add(newFile);
+        menu.Items.Add(newFolder);
+        menu.Items.Add(newShortcut);
+        menu.IsOpen = true;
+        e.Handled = true;
+    }
+
+    private void CreateInDesktopContext(string categoryKey, Action<ZoneModel> createAction)
+    {
+        var targetZone = _state.Zones.FirstOrDefault(zone => zone.CategoryKey == categoryKey)
+                         ?? _state.Zones.FirstOrDefault(zone => zone.CategoryKey == "other")
+                         ?? _state.Zones.FirstOrDefault();
+        if (targetZone is null)
+        {
+            ShowStatus("没有可用的分区");
+            return;
+        }
+
+        createAction(targetZone);
     }
 
     private bool ContainsPoint(FrameworkElement element, Point point)
@@ -410,7 +464,7 @@ public partial class MainWindow : System.Windows.Window
         {
             _iconVisibility.SetVisible(false);
         }
-        if (layoutAdjusted || shellItemsChanged || desktopMappingsAdded > 0 || staleMappingsRemoved > 0)
+        if (layoutAdjusted || shellItemsChanged || desktopMappingsAdded.Count > 0 || staleMappingsRemoved > 0)
         {
             RequestSave();
         }
@@ -435,7 +489,12 @@ public partial class MainWindow : System.Windows.Window
             ShowStatus(_desktopHost.IsEmbedded ? "已挂载到 Windows 桌面" : "正在使用安全置底模式");
         }
 
-        if (!startupConfigured)
+        if (desktopMappingsAdded.Count > 0 && zonesRendered)
+        {
+            HighlightMappingZones(desktopMappingsAdded);
+            ShowStatus(FormatMappingStatus(desktopMappingsAdded));
+        }
+        else if (!startupConfigured)
         {
             ShowStatus("开机自启动设置暂时无法更新");
         }
@@ -793,7 +852,7 @@ public partial class MainWindow : System.Windows.Window
         return null;
     }
 
-    private int AddUnmappedDesktopItems()
+    private IReadOnlyList<DesktopMappingAddition> AddUnmappedDesktopItems()
     {
         var scanner = new DesktopScanner(_classifier);
         var scannedItems = scanner.ScanDefaultDesktops();
@@ -802,7 +861,7 @@ public partial class MainWindow : System.Windows.Window
             .Select(item => item.Path)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var added = 0;
+        var additions = new List<DesktopMappingAddition>();
         foreach (var item in scannedItems)
         {
             if (!mappedPaths.Add(item.Path))
@@ -819,10 +878,10 @@ public partial class MainWindow : System.Windows.Window
             }
 
             target.Items.Add(item);
-            added++;
+            additions.Add(new DesktopMappingAddition(target, item));
         }
 
-        return added;
+        return additions;
     }
 
     private int RemoveMissingMappings()
@@ -893,14 +952,18 @@ public partial class MainWindow : System.Windows.Window
 
     private void OrganizeDesktop(bool showNotification)
     {
-        var added = AddUnmappedDesktopItems();
+        var additions = AddUnmappedDesktopItems();
         RenderZones();
-        RequestSave();
-        var message = added == 0 ? "桌面映射已是最新状态" : $"已新增 {added} 个安全映射";
-        ShowStatus(message);
-        if (showNotification && added > 0)
+        if (additions.Count > 0)
         {
-            _trayService?.ShowMessage("一键整理完成", $"新增 {added} 个映射，没有移动任何文件。");
+            HighlightMappingZones(additions);
+        }
+
+        RequestSave();
+        ShowStatus(additions.Count == 0 ? "桌面映射已是最新状态" : FormatMappingStatus(additions));
+        if (showNotification && additions.Count > 0)
+        {
+            _trayService?.ShowMessage("一键整理完成", $"新增 {additions.Count} 个映射，没有移动任何文件。");
         }
     }
 
@@ -1095,6 +1158,7 @@ public partial class MainWindow : System.Windows.Window
         var moved = 0;
         var mapped = 0;
         var skipped = 0;
+        var additions = new List<DesktopMappingAddition>();
 
         foreach (var sourcePath in paths.Distinct(StringComparer.OrdinalIgnoreCase))
         {
@@ -1162,7 +1226,9 @@ public partial class MainWindow : System.Windows.Window
             }
 
             RemoveMappingsForMovedPath(source, isDirectory);
-            targetZone.Items.Add(DesktopItem.FromPath(destination, targetZone.CategoryKey));
+            var mappedItem = DesktopItem.FromPath(destination, targetZone.CategoryKey);
+            targetZone.Items.Add(mappedItem);
+            additions.Add(new DesktopMappingAddition(targetZone, mappedItem));
             mapped++;
         }
 
@@ -1170,16 +1236,13 @@ public partial class MainWindow : System.Windows.Window
         {
             _iconService.Invalidate();
             RenderZones();
+            HighlightMappingZones(additions);
             RequestSave();
         }
 
-        var message = moved == 0
-            ? mapped == 0
-                ? "没有可移动的文件"
-                : $"已添加 {mapped} 个桌面映射到“{targetZone.Name}”"
-            : skipped == 0
-                ? $"已将 {moved} 个项目移动到桌面并映射到“{targetZone.Name}”"
-                : $"已移动 {moved} 个项目，{skipped} 个项目跳过";
+        var message = mapped == 0
+            ? "没有可移动的文件"
+            : FormatMappingStatus(additions) + (skipped == 0 ? string.Empty : $"，{skipped} 个项目跳过");
         ShowStatus(message);
     }
 
@@ -1584,14 +1647,19 @@ public partial class MainWindow : System.Windows.Window
     private void RefreshVisibleItems()
     {
         _iconService.Invalidate();
-        var added = AddUnmappedDesktopItems();
+        var additions = AddUnmappedDesktopItems();
         var removed = RemoveMissingMappings();
-        if (added > 0 || removed > 0)
+        if (additions.Count > 0 || removed > 0)
         {
             RenderZones();
+            if (additions.Count > 0)
+            {
+                HighlightMappingZones(additions);
+            }
+
             RequestSave();
-            ShowStatus(added > 0
-                ? $"已自动映射 {added} 个桌面项目"
+            ShowStatus(additions.Count > 0
+                ? FormatMappingStatus(additions)
                 : $"已清理 {removed} 个失效映射");
             return;
         }
@@ -1600,6 +1668,46 @@ public partial class MainWindow : System.Windows.Window
         {
             card.RefreshItems();
         }
+    }
+
+    private void HighlightMappingZones(IReadOnlyList<DesktopMappingAddition> additions)
+    {
+        var addedZoneIds = additions
+            .Select(addition => addition.Zone.Id)
+            .ToHashSet();
+        foreach (var card in DesktopCanvas.Children
+                     .OfType<ZoneCard>()
+                     .Where(card => addedZoneIds.Contains(card.Model.Id)))
+        {
+            card.PlayMappingAddedHighlight();
+        }
+    }
+
+    private static string FormatMappingStatus(IReadOnlyList<DesktopMappingAddition> additions)
+    {
+        var parts = additions
+            .GroupBy(addition => addition.Zone)
+            .Select(group =>
+            {
+                var names = group
+                    .Take(3)
+                    .Select(addition => $"“{GetMappingName(addition.Item)}”")
+                    .ToList();
+                var suffix = group.Count() > names.Count ? $"等 {group.Count()} 个项目" : string.Empty;
+                return $"{string.Join("、", names)}{suffix} → “{group.Key.Name}”";
+            });
+        return "已映射：" + string.Join("；", parts);
+    }
+
+    private static string GetMappingName(DesktopItem item)
+    {
+        if (DesktopItem.IsShellLocation(item.Path))
+        {
+            return item.DisplayName;
+        }
+
+        var fileName = Path.GetFileName(item.Path);
+        return string.IsNullOrWhiteSpace(fileName) ? item.DisplayName : fileName;
     }
 
     private void UpdateToolbarState()

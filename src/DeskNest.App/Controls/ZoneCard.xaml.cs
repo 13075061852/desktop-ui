@@ -189,6 +189,28 @@ public partial class ZoneCard : UserControl
         RenderItems();
     }
 
+    internal void PlayMappingAddedHighlight()
+    {
+        if (ColorConverter.ConvertFromString(Model.AccentColor) is Color accent)
+        {
+            MappingHighlight.BorderBrush = new SolidColorBrush(accent);
+            MappingHighlight.Background = new SolidColorBrush(Color.FromArgb(24, accent.R, accent.G, accent.B));
+        }
+
+        MappingHighlight.BeginAnimation(UIElement.OpacityProperty, null);
+        MappingHighlight.Opacity = 0;
+        var animation = new DoubleAnimationUsingKeyFrames
+        {
+            Duration = TimeSpan.FromMilliseconds(1150),
+            FillBehavior = FillBehavior.Stop
+        };
+        animation.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+        animation.KeyFrames.Add(new LinearDoubleKeyFrame(0.95, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(110))));
+        animation.KeyFrames.Add(new LinearDoubleKeyFrame(0.38, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(430))));
+        animation.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(1150))));
+        MappingHighlight.BeginAnimation(UIElement.OpacityProperty, animation);
+    }
+
     private void ApplyModel()
     {
         Width = Model.Width;
