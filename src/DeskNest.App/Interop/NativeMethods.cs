@@ -36,6 +36,7 @@ internal static class NativeMethods
     internal const uint ShgfiSysIconIndex = 0x000004000;
     internal const uint ShgsiIcon = 0x000000100;
     internal const uint ShgsiLargeIcon = 0x000000000;
+    internal const uint SiidComputer = 17;
     internal const uint SiidRecycler = 31;
     internal const int ShilLarge = 0;
     internal const int ShilExtraLarge = 2;

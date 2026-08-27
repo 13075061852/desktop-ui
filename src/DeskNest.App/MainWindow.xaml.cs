@@ -684,15 +684,6 @@ public partial class MainWindow : System.Windows.Window
 
     private bool EnsureSystemShellItems()
     {
-        if (_state.Zones.SelectMany(zone => zone.Items).Any(item =>
-                string.Equals(
-                    item.Path,
-                    DesktopItem.RecycleBinShellPath,
-                    StringComparison.OrdinalIgnoreCase)))
-        {
-            return false;
-        }
-
         var target = _state.Zones.FirstOrDefault(zone =>
                          zone.Name.Contains("系统工具", StringComparison.OrdinalIgnoreCase))
                      ?? _state.Zones.FirstOrDefault(zone => zone.CategoryKey == "other")
@@ -702,11 +693,46 @@ public partial class MainWindow : System.Windows.Window
             return false;
         }
 
-        target.Items.Add(DesktopItem.FromShellLocation(
-            DesktopItem.RecycleBinShellPath,
-            "回收站",
-            target.CategoryKey));
-        return true;
+        var added = false;
+        if (!HasShellItem(DesktopItem.RecycleBinShellPath))
+        {
+            target.Items.Add(DesktopItem.FromShellLocation(
+                DesktopItem.RecycleBinShellPath,
+                "回收站",
+                target.CategoryKey));
+            added = true;
+        }
+
+        if (IsDesktopShellIconVisible("{20D04FE0-3AEA-1069-A2D8-08002B30309D}") &&
+            !HasShellItem(DesktopItem.ThisPcShellPath))
+        {
+            var folderTarget = _state.Zones.FirstOrDefault(zone => zone.CategoryKey == "folders") ?? target;
+            folderTarget.Items.Add(DesktopItem.FromShellLocation(
+                DesktopItem.ThisPcShellPath,
+                "此电脑",
+                folderTarget.CategoryKey));
+            added = true;
+        }
+
+        return added;
+    }
+
+    private bool HasShellItem(string shellPath) => _state.Zones
+        .SelectMany(zone => zone.Items)
+        .Any(item => string.Equals(item.Path, shellPath, StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsDesktopShellIconVisible(string clsid)
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(
+                @"Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel");
+            return key?.GetValue(clsid) is not int value || value == 0;
+        }
+        catch (Exception)
+        {
+            return true;
+        }
     }
 
     private int AddUnmappedDesktopItems()

@@ -20,8 +20,10 @@ internal sealed class ShellIconService
         }
 
         var source = string.Equals(path, DesktopItem.RecycleBinShellPath, StringComparison.OrdinalIgnoreCase)
-            ? TryGetRecycleBinIcon()
-            : TryGetSystemImageListIcon(path) ?? TryGetLargeShellIcon(path);
+            ? TryGetStockIcon(NativeMethods.SiidRecycler)
+            : string.Equals(path, DesktopItem.ThisPcShellPath, StringComparison.OrdinalIgnoreCase)
+                ? TryGetStockIcon(NativeMethods.SiidComputer)
+                : TryGetSystemImageListIcon(path) ?? TryGetLargeShellIcon(path);
         if (source is not null)
         {
             source.Freeze();
@@ -31,7 +33,7 @@ internal sealed class ShellIconService
         return source;
     }
 
-    private static BitmapSource? TryGetRecycleBinIcon()
+    private static BitmapSource? TryGetStockIcon(uint stockIconId)
     {
         var iconInfo = new NativeMethods.StockIconInfo
         {
@@ -39,7 +41,7 @@ internal sealed class ShellIconService
             Path = string.Empty
         };
         if (NativeMethods.SHGetStockIconInfo(
-                NativeMethods.SiidRecycler,
+                stockIconId,
                 NativeMethods.ShgsiIcon | NativeMethods.ShgsiLargeIcon,
                 ref iconInfo) < 0 || iconInfo.IconHandle == 0)
         {

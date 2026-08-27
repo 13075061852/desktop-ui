@@ -5,6 +5,7 @@ namespace DeskNest.Core.Models;
 public sealed class DesktopItem
 {
     public const string RecycleBinShellPath = "shell:RecycleBinFolder";
+    public const string ThisPcShellPath = "shell:MyComputerFolder";
 
     public Guid Id { get; set; } = Guid.NewGuid();
 
