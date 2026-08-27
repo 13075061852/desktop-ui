@@ -189,6 +189,32 @@ public partial class ZoneCard : UserControl
         RenderItems();
     }
 
+    internal void RevealItem(Guid itemId)
+    {
+        if (Model.IsCollapsed)
+        {
+            return;
+        }
+
+        var itemElement = ItemsPanel.Children
+            .OfType<FrameworkElement>()
+            .FirstOrDefault(element => element.Tag is DesktopItem item && item.Id == itemId);
+        if (itemElement is null)
+        {
+            return;
+        }
+
+        Dispatcher.BeginInvoke(
+            () =>
+            {
+                if (IsLoaded && itemElement.IsVisible)
+                {
+                    itemElement.BringIntoView();
+                }
+            },
+            DispatcherPriority.Loaded);
+    }
+
     internal void PlayMappingAddedHighlight()
     {
         if (ColorConverter.ConvertFromString(Model.AccentColor) is Color accent)

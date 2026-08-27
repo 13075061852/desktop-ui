@@ -1672,14 +1672,18 @@ public partial class MainWindow : System.Windows.Window
 
     private void HighlightMappingZones(IReadOnlyList<DesktopMappingAddition> additions)
     {
-        var addedZoneIds = additions
-            .Select(addition => addition.Zone.Id)
-            .ToHashSet();
-        foreach (var card in DesktopCanvas.Children
-                     .OfType<ZoneCard>()
-                     .Where(card => addedZoneIds.Contains(card.Model.Id)))
+        foreach (var group in additions.GroupBy(addition => addition.Zone))
         {
+            var card = DesktopCanvas.Children
+                .OfType<ZoneCard>()
+                .FirstOrDefault(value => value.Model.Id == group.Key.Id);
+            if (card is null)
+            {
+                continue;
+            }
+
             card.PlayMappingAddedHighlight();
+            card.RevealItem(group.Last().Item.Id);
         }
     }
 
