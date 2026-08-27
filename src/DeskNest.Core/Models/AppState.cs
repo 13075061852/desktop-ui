@@ -8,6 +8,8 @@ public sealed class AppState
 
     public bool DesktopIconsHidden { get; set; }
 
+    public bool LaunchAtStartup { get; set; } = true;
+
     public string Theme { get; set; } = "System";
 
     public double PanelOpacity { get; set; } = 0.84;

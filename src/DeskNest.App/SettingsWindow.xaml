@@ -103,6 +103,50 @@
             </Setter>
         </Style>
 
+        <Style x:Key="StartupCheckBoxStyle" TargetType="CheckBox">
+            <Setter Property="Height" Value="32" />
+            <Setter Property="Padding" Value="10,0" />
+            <Setter Property="Foreground" Value="{DynamicResource SettingsMutedBrush}" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Border x:Name="CheckSurface" Background="Transparent" CornerRadius="10"
+                                Padding="{TemplateBinding Padding}">
+                            <Grid>
+                                <Border x:Name="CheckBoxSurface" Width="17" Height="17"
+                                        HorizontalAlignment="Left" VerticalAlignment="Center"
+                                        CornerRadius="5" BorderBrush="{DynamicResource SettingsStrokeBrush}"
+                                        BorderThickness="1" />
+                                <Path x:Name="CheckMark" Data="M 3,8 L 7,12 L 14,3"
+                                      Width="13" Height="13" HorizontalAlignment="Left"
+                                      Margin="2,0,0,0" VerticalAlignment="Center"
+                                      Stretch="Uniform" Stroke="#FF14231F" StrokeThickness="1.8"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      Visibility="Collapsed" />
+                                <ContentPresenter Margin="28,0,0,0" VerticalAlignment="Center"
+                                                  TextElement.Foreground="{TemplateBinding Foreground}" />
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="CheckSurface" Property="Background" Value="{DynamicResource SettingsHoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="CheckBoxSurface" Property="Background" Value="{StaticResource AccentBrush}" />
+                                <Setter TargetName="CheckBoxSurface" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                <Setter TargetName="CheckMark" Property="Visibility" Value="Visible" />
+                                <Setter Property="Foreground" Value="{DynamicResource SettingsTextBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="CloseButtonStyle" TargetType="Button">
             <Setter Property="Width" Value="32" />
             <Setter Property="Height" Value="32" />
@@ -423,6 +467,8 @@
 
             <Grid Grid.Row="2" Margin="30,0">
                 <Border Height="1" VerticalAlignment="Top" Background="{DynamicResource SettingsStrokeBrush}" />
+                <CheckBox x:Name="LaunchAtStartupChoice" HorizontalAlignment="Left" VerticalAlignment="Center"
+                          Style="{StaticResource StartupCheckBoxStyle}" Content="开机自启动" />
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                     <Button Style="{StaticResource SettingsButtonStyle}" Content="取消" Margin="0,0,10,0" Click="OnCancelClick" />
                     <Button Style="{StaticResource SettingsPrimaryButtonStyle}" Content="保存设置" Click="OnSaveClick" />

@@ -23,6 +23,7 @@ public partial class SettingsWindow : System.Windows.Window
     private readonly double _originalPanelOpacity;
     private readonly double _originalIconSize;
     private readonly string _originalToolbarAlignment;
+    private readonly bool _originalLaunchAtStartup;
     private string _pendingWallpaperSelection;
     private bool _settingsCommitted;
     private bool _wallpaperPreviewChanged;
@@ -43,6 +44,7 @@ public partial class SettingsWindow : System.Windows.Window
         _originalPanelOpacity = state.PanelOpacity;
         _originalIconSize = state.IconSize;
         _originalToolbarAlignment = state.ToolbarAlignment;
+        _originalLaunchAtStartup = state.LaunchAtStartup;
         InitializeComponent();
 
         (state.Theme switch
@@ -59,6 +61,7 @@ public partial class SettingsWindow : System.Windows.Window
         }).IsChecked = true;
         OpacitySlider.Value = state.PanelOpacity;
         IconSizeSlider.Value = state.IconSize;
+        LaunchAtStartupChoice.IsChecked = state.LaunchAtStartup;
         UpdateLabels();
         ApplyWindowTheme();
         BuildWallpaperOptions();
@@ -372,6 +375,7 @@ public partial class SettingsWindow : System.Windows.Window
         _state.IconSize = IconSizeSlider.Value;
         _state.ToolbarAlignment = GetSelectedToolbarAlignment();
         _state.WallpaperSelection = _pendingWallpaperSelection;
+        _state.LaunchAtStartup = LaunchAtStartupChoice.IsChecked == true;
         _settingsCommitted = true;
         DialogResult = true;
     }
@@ -392,6 +396,7 @@ public partial class SettingsWindow : System.Windows.Window
         _state.PanelOpacity = _originalPanelOpacity;
         _state.IconSize = _originalIconSize;
         _state.ToolbarAlignment = _originalToolbarAlignment;
+        _state.LaunchAtStartup = _originalLaunchAtStartup;
         Dispatcher.BeginInvoke(
             () => _previewAppearance?.Invoke(false),
             System.Windows.Threading.DispatcherPriority.Background);

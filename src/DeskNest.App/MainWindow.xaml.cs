@@ -31,6 +31,7 @@ public partial class MainWindow : System.Windows.Window
     private readonly DesktopHostService _desktopHost = new();
     private readonly DesktopIconVisibilityService _iconVisibility = new();
     private readonly DesktopWallpaperService _wallpaperService = new();
+    private readonly StartupService _startupService = new();
     private readonly DispatcherTimer _saveTimer;
     private readonly DispatcherTimer _statusTimer;
     private readonly DispatcherTimer _menuDismissTimer;
@@ -368,6 +369,7 @@ public partial class MainWindow : System.Windows.Window
         _loaded = true;
         var isFirstRun = !File.Exists(_stateStore.StatePath);
         _state = await _stateStore.LoadAsync();
+        var startupConfigured = _startupService.Apply(_state.LaunchAtStartup);
         var shellItemsAdded = EnsureSystemShellItems();
         if (!string.IsNullOrWhiteSpace(_state.WallpaperSelection))
         {
@@ -429,6 +431,11 @@ public partial class MainWindow : System.Windows.Window
         else
         {
             ShowStatus(_desktopHost.IsEmbedded ? "已挂载到 Windows 桌面" : "正在使用安全置底模式");
+        }
+
+        if (!startupConfigured)
+        {
+            ShowStatus("开机自启动设置暂时无法更新");
         }
     }
 
@@ -1390,9 +1397,12 @@ public partial class MainWindow : System.Windows.Window
             return;
         }
 
+        var startupConfigured = _startupService.Apply(_state.LaunchAtStartup);
         RenderZones();
         RequestSave();
-        ShowStatus("外观设置已保存");
+        ShowStatus(startupConfigured
+            ? "外观设置已保存"
+            : "外观设置已保存，但开机自启动设置未能更新");
     }
 
     private void RefreshVisibleItems()

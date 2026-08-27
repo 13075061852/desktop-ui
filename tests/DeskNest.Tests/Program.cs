@@ -6,6 +6,7 @@ var tests = new List<(string Name, Action Run)>
     ("default state creates five stable zones", () =>
     {
         var state = AppState.CreateDefault();
+        Assert.Equal(true, state.LaunchAtStartup);
         Assert.Equal(5, state.Zones.Count);
         Assert.SequenceEqual(
             new[] { "apps", "documents", "images", "folders", "other" },
