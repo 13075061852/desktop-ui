@@ -10,7 +10,8 @@
         ShowInTaskbar="False"
         Width="1600" Height="900"
         Left="0" Top="0">
-    <Grid x:Name="RootGrid" Background="{x:Null}">
+    <Grid x:Name="RootGrid" Background="Transparent"
+          PreviewMouseRightButtonUp="OnDesktopPreviewRightButtonUp">
         <Canvas x:Name="DesktopCanvas" Background="{x:Null}" />
         <Canvas x:Name="AlignmentGuideCanvas" IsHitTestVisible="False">
             <Line x:Name="VerticalAlignmentGuide" Visibility="Collapsed"
