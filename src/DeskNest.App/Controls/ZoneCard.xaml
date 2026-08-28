@@ -121,11 +121,15 @@
                             <TextBlock x:Name="TitleText" FontWeight="SemiBold" FontSize="14"
                                        TextTrimming="CharacterEllipsis"
                                        MouseLeftButtonDown="OnTitleDoubleClick" />
-                            <TextBox x:Name="TitleEditor" Visibility="Collapsed" Height="29" MinWidth="120"
-                                     VerticalContentAlignment="Center" Padding="7,0"
-                                     Background="#DFFFFFFF"
+                            <TextBox x:Name="TitleEditor" Visibility="Collapsed" Height="22" MinWidth="110"
+                                     FontWeight="SemiBold" FontSize="14"
+                                     VerticalContentAlignment="Center" Padding="0"
+                                     Background="Transparent"
                                      Foreground="{StaticResource TextPrimaryBrush}"
-                                     BorderBrush="{StaticResource StrokeBrush}" BorderThickness="1"
+                                     CaretBrush="{StaticResource TextPrimaryBrush}"
+                                     SelectionBrush="{StaticResource AccentBrush}"
+                                     BorderBrush="{StaticResource AccentBrush}" BorderThickness="0,0,0,1.5"
+                                     FocusVisualStyle="{x:Null}"
                                      LostKeyboardFocus="OnTitleEditorLostFocus"
                                      KeyDown="OnTitleEditorKeyDown" />
                         </Grid>
