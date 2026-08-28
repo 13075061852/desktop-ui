@@ -61,6 +61,13 @@ public partial class MainWindow : System.Windows.Window
     {
         InitializeComponent();
         DragGhostLayer.Attach(DragGhostCanvas);
+        // Some full-window helper layers can become the native drag hit target even when
+        // the pointer is visually over a zone. Keep a handled-events-too preview handler
+        // as a fallback and route the drag by the actual screen position.
+        RootGrid.AddHandler(
+            DragDrop.PreviewDragOverEvent,
+            new DragEventHandler(OnRootPreviewDragOver),
+            handledEventsToo: true);
 
         _saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(550) };
         _saveTimer.Tick += async (_, _) =>
@@ -144,6 +151,60 @@ public partial class MainWindow : System.Windows.Window
         return IsInteractivePoint(clientHitPoint)
             ? NativeMethods.HtClient
             : NativeMethods.HtTransparent;
+    }
+
+    private void OnRootPreviewDragOver(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetData(ZoneCard.InternalItemFormat) is not ItemDragPayload payload)
+        {
+            return;
+        }
+
+        // If the routed source is already inside a card, that card's normal handler owns the
+        // event. Otherwise the source is likely a splitter/helper layer or the canvas itself.
+        if (FindZoneCardAncestor(e.OriginalSource as DependencyObject) is not null)
+        {
+            return;
+        }
+
+        var point = e.GetPosition(this);
+        var target = DesktopCanvas.Children
+            .OfType<ZoneCard>()
+            .LastOrDefault(card => ContainsPoint(card, point));
+        if (target is null)
+        {
+            ClearAllDragPreviews();
+            e.Effects = DragDropEffects.Move;
+            e.Handled = true;
+            return;
+        }
+
+        try
+        {
+            if (target.TryHandleInternalDragOver(PointToScreen(point), payload))
+            {
+                e.Effects = DragDropEffects.Move;
+                e.Handled = true;
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // The target can be rebuilt while a drag event is in flight.
+            ClearAllDragPreviews();
+        }
+    }
+
+    private static ZoneCard? FindZoneCardAncestor(DependencyObject? source)
+    {
+        for (var current = source; current is not null; current = VisualTreeHelper.GetParent(current))
+        {
+            if (current is ZoneCard card)
+            {
+                return card;
+            }
+        }
+
+        return null;
     }
 
     private void ClearDragPreviewsExcept(ZoneCard activeCard)
@@ -646,7 +707,9 @@ public partial class MainWindow : System.Windows.Window
             maximumRight,
             maximumBottom,
             hysteresis,
-            stickyEscapeDistance: 28);
+            // Keep the snap hold region small so a zone can leave an edge/guide
+            // without feeling stuck during a drag.
+            stickyEscapeDistance: 12);
     }
 
     private void ApplyCompressedObstacleBounds(IReadOnlyList<ZoneModel> zones, IReadOnlyList<ZoneBounds> bounds)

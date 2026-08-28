@@ -1517,6 +1517,14 @@ public partial class ZoneCard : UserControl
 
     private void OnFolderDragOver(object sender, DragEventArgs e)
     {
+        // An internal DeskNest drag also carries FileDrop data so it can be dragged
+        // to Explorer. Do not let a folder tile steal that gesture from in-zone sorting.
+        if (e.Data.GetData(InternalItemFormat) is ItemDragPayload)
+        {
+            ClearFolderDropTarget();
+            return;
+        }
+
         var paths = GetFileDropPaths(e);
         if (paths.Length == 0 || sender is not FrameworkElement { Tag: DesktopItem folder } ||
             !Directory.Exists(folder.Path))
@@ -1534,15 +1542,35 @@ public partial class ZoneCard : UserControl
 
     private void OnFolderDragLeave(object sender, DragEventArgs e)
     {
+        if (e.Data.GetData(InternalItemFormat) is ItemDragPayload)
+        {
+            return;
+        }
+
         if (sender is not FrameworkElement folderElement)
         {
             ClearFolderDropTarget();
             return;
         }
 
-        var point = e.GetPosition(folderElement);
-        if (point.X < 0 || point.Y < 0 ||
-            point.X > folderElement.ActualWidth || point.Y > folderElement.ActualHeight)
+        // Same coordinate reliability issue as OnDragLeave: e.GetPosition can report
+        // the wrong space when the OLE drop target flips, so verify with the cursor.
+        if (!NativeMethods.GetCursorPos(out var cursor))
+        {
+            return;
+        }
+
+        try
+        {
+            var cardPoint = PointFromScreen(new Point(cursor.X, cursor.Y));
+            var bounds = folderElement.TransformToAncestor(this)
+                .TransformBounds(new Rect(0, 0, folderElement.ActualWidth, folderElement.ActualHeight));
+            if (!bounds.Contains(cardPoint))
+            {
+                ClearFolderDropTarget();
+            }
+        }
+        catch (InvalidOperationException)
         {
             ClearFolderDropTarget();
         }
@@ -1550,6 +1578,13 @@ public partial class ZoneCard : UserControl
 
     private void OnFolderDrop(object sender, DragEventArgs e)
     {
+        // Let the card's OnDrop handle internal item ordering. This handler is only
+        // for files coming from outside DeskNest (Explorer, desktop, etc.).
+        if (e.Data.GetData(InternalItemFormat) is ItemDragPayload)
+        {
+            return;
+        }
+
         var paths = GetFileDropPaths(e);
         if (paths.Length == 0 || sender is not FrameworkElement { Tag: DesktopItem folder } ||
             !Directory.Exists(folder.Path))
@@ -1578,6 +1613,38 @@ public partial class ZoneCard : UserControl
         }
 
         return [];
+    }
+
+    internal bool TryHandleInternalDragOver(Point screenPoint, ItemDragPayload payload)
+    {
+        if (!IsLoaded || PresentationSource.FromVisual(this) is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            var cardPoint = PointFromScreen(screenPoint);
+            if (cardPoint.X < 0 || cardPoint.Y < 0 ||
+                cardPoint.X > ActualWidth || cardPoint.Y > ActualHeight)
+            {
+                return false;
+            }
+
+            _activeDragPayload = payload;
+            if (!_dragTrackingTimer.IsEnabled)
+            {
+                _dragTrackingTimer.Start();
+            }
+
+            UpdateDragReflow(payload, ItemsPanel.PointFromScreen(screenPoint));
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            EndLiveReflow();
+            return false;
+        }
     }
 
     private void OnDragOver(object sender, DragEventArgs e)
@@ -1648,16 +1715,34 @@ public partial class ZoneCard : UserControl
 
     private void OnDragLeave(object sender, DragEventArgs e)
     {
-        // DragLeave bubbles whenever the pointer crosses a child tile. Resetting the preview for
-        // those internal transitions makes every tile jump back and reflow again on the next frame.
-        // Only clear the mobile-style preview after the pointer has actually left the whole card.
-        var point = e.GetPosition(this);
-        if (point.X < 0 || point.Y < 0 || point.X > ActualWidth || point.Y > ActualHeight)
+        // Do NOT trust e.GetPosition(this) here. When the OLE drop target flips between
+        // the card and a full-window overlay (splitter rails, RootGrid), DragLeave fires
+        // on the card with the position reported in the wrong coordinate space, so the
+        // old guard believed the pointer had left and killed the live reflow on every
+        // target switch - the cause of "no response" drags in some zones. The raw cursor
+        // position is reliable (the drag timer already uses it).
+        if (!NativeMethods.GetCursorPos(out var cursor))
+        {
+            return;
+        }
+
+        Point cardPoint;
+        try
+        {
+            cardPoint = PointFromScreen(new Point(cursor.X, cursor.Y));
+        }
+        catch (InvalidOperationException)
+        {
+            return;
+        }
+
+        if (cardPoint.X < 0 || cardPoint.Y < 0 ||
+            cardPoint.X > ActualWidth || cardPoint.Y > ActualHeight)
         {
             EndLiveReflow();
             ClearFolderDropTarget();
         }
-        else if (!IsPointerOverFolderDropTarget(point))
+        else if (!IsPointerOverFolderDropTarget(cardPoint))
         {
             ClearFolderDropTarget();
         }
@@ -1807,6 +1892,13 @@ public partial class ZoneCard : UserControl
         }
 
         var slots = elements.Select(GetDragLayoutOrigin).ToList();
+        foreach (var element in elements)
+        {
+            // Reordering only changes transforms. Cache each tile so large Shell icons and
+            // text are not rasterized again on every animation frame.
+            element.CacheMode ??= new BitmapCache();
+        }
+
         var sourceIndex = payload.SourceZoneId == Model.Id
             ? Array.FindIndex(elements, element => element.Tag is DesktopItem item && item.Id == payload.ItemId)
             : -1;
@@ -1911,6 +2003,14 @@ public partial class ZoneCard : UserControl
         DependencyProperty property,
         double target)
     {
+        // Keep an existing animation alive when its destination did not change. Restarting
+        // every tile on each slot update made some partitions appear frozen under fast drags.
+        var baseValue = (double)translation.GetAnimationBaseValue(property);
+        if (Math.Abs(baseValue - target) < 0.1)
+        {
+            return;
+        }
+
         var current = (double)translation.GetValue(property);
         translation.BeginAnimation(property, null);
         translation.SetValue(property, target);
@@ -1951,6 +2051,7 @@ public partial class ZoneCard : UserControl
                      .OfType<FrameworkElement>()
                      .Where(element => element.Tag is DesktopItem))
         {
+            element.CacheMode = null;
             SpringTransformHome(element);
         }
     }
@@ -1966,6 +2067,7 @@ public partial class ZoneCard : UserControl
                      .OfType<FrameworkElement>()
                      .Where(element => element.Tag is DesktopItem))
         {
+            element.CacheMode = null;
             element.RenderTransform = null;
         }
     }

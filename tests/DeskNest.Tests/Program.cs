@@ -104,6 +104,21 @@ var tests = new List<(string Name, Action Run)>
 
         Assert.Near(88, result.X, 0.1);
     }),
+    ("zone collision recovers an oversized zone to the top boundary", () =>
+    {
+        var current = new ZoneBounds(0, 220, 200, 900);
+        var result = ZoneCollisionResolver.Constrain(
+            current,
+            current with { Y = 0 },
+            Array.Empty<ZoneBounds>(),
+            12,
+            0,
+            72,
+            1200,
+            900);
+
+        Assert.Near(72, result.Y, 0.1);
+    }),
     ("zone collision lets vertical movement continue when horizontal movement is blocked", () =>
     {
         var current = new ZoneBounds(0, 72, 200, 200);

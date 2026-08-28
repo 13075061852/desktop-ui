@@ -1,0 +1,8 @@
+{
+  "name": "desknest",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/build-release.ps1"
+  }
+}

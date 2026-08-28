@@ -22,6 +22,16 @@ public static class ZoneCollisionResolver
         var obstacleArray = obstacles.ToArray();
         desired = ClampToCanvas(desired, minimumX, minimumY, maximumRight, maximumBottom);
 
+        // A previously saved layout can be larger than the current work area (for example
+        // after changing display scaling). In that case the old position is not a valid
+        // collision-solver starting point. If the requested endpoint is valid, let the zone
+        // recover to it instead of treating the invalid start as an immovable obstacle.
+        if (!IsAvailable(current, obstacleArray, gap, minimumX, minimumY, maximumRight, maximumBottom) &&
+            IsAvailable(desired, obstacleArray, gap, minimumX, minimumY, maximumRight, maximumBottom))
+        {
+            return desired;
+        }
+
         var isMove = Math.Abs(desired.Width - current.Width) < 0.01 &&
                      Math.Abs(desired.Height - current.Height) < 0.01;
         if (isMove)
@@ -58,8 +68,13 @@ public static class ZoneCollisionResolver
         double maximumBottom)
     {
         const double tolerance = 0.01;
+        var widthExceedsCanvas = candidate.Width > maximumRight - minimumX + tolerance;
+        var heightExceedsCanvas = candidate.Height > maximumBottom - minimumY + tolerance;
         if (candidate.X < minimumX - tolerance || candidate.Y < minimumY - tolerance ||
-            candidate.Right > maximumRight + tolerance || candidate.Bottom > maximumBottom + tolerance)
+            (!widthExceedsCanvas && candidate.Right > maximumRight + tolerance) ||
+            (!heightExceedsCanvas && candidate.Bottom > maximumBottom + tolerance) ||
+            (widthExceedsCanvas && candidate.X > minimumX + tolerance) ||
+            (heightExceedsCanvas && candidate.Y > minimumY + tolerance))
         {
             return false;
         }

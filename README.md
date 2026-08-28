@@ -16,8 +16,10 @@
 ## 快速构建
 
 ```powershell
-.\scripts\build-release.ps1
+npm run build
 ```
+
+该命令会自动还原项目、运行测试、构建最新 Release 版 `exe`，并生成 ZIP 安装包。
 
 发布产物位于 `dist\DeskNest-win-x64`。项目不依赖第三方 NuGet 包。
 
