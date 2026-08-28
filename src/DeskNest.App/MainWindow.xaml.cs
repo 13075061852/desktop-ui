@@ -592,7 +592,11 @@ public partial class MainWindow : System.Windows.Window
         ApplyThemeSurface(lightTheme);
     }
 
-    private ZoneAlignmentResult ConstrainZoneBounds(ZoneModel zone, ZoneBounds current, ZoneBounds desired)
+    private ZoneAlignmentResult ConstrainZoneBounds(
+        ZoneModel zone,
+        ZoneBounds current,
+        ZoneBounds desired,
+        ZoneSnapHysteresis hysteresis)
     {
         var otherZones = _state.Zones
             .Where(other => other.Id != zone.Id)
@@ -635,12 +639,14 @@ public partial class MainWindow : System.Windows.Window
             desired,
             collisionSafe,
             obstacles,
-            10,
-            12,
+            snapDistance: 10,
+            gap: 12,
             minimumX,
             minimumY,
             maximumRight,
-            maximumBottom);
+            maximumBottom,
+            hysteresis,
+            stickyEscapeDistance: 16);
     }
 
     private void ApplyCompressedObstacleBounds(IReadOnlyList<ZoneModel> zones, IReadOnlyList<ZoneBounds> bounds)

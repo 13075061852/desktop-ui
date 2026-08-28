@@ -159,7 +159,11 @@ public partial class ZoneCard : UserControl
 
     public ZoneModel Model { get; }
 
-    internal Func<ZoneModel, ZoneBounds, ZoneBounds, ZoneAlignmentResult>? BoundsConstraint { get; set; }
+    internal Func<ZoneModel, ZoneBounds, ZoneBounds, ZoneSnapHysteresis, ZoneAlignmentResult>? BoundsConstraint { get; set; }
+
+    /// <summary>Sticky snap state carried across drag frames so a held guide
+    /// survives the pointer crossing it (prevents flicker near the threshold).</summary>
+    private ZoneSnapHysteresis _snapHysteresis;
     internal Func<IReadOnlyList<ShellNewDefinition>>? ShellNewDefinitionsProvider { get; set; }
     internal Action<double?, double?>? AlignmentGuidesChanged { get; set; }
     internal Action<ZoneCard>? DragPreviewActivated { get; set; }
@@ -739,6 +743,7 @@ public partial class ZoneCard : UserControl
         _modelStartX = Model.X;
         _modelStartY = Model.Y;
         _draggingHeader = true;
+        _snapHysteresis = default;
         _capturedHeader = header;
         header.CaptureMouse();
         e.Handled = true;
@@ -758,8 +763,9 @@ public partial class ZoneCard : UserControl
             X = Math.Max(HorizontalDesktopInset, _modelStartX + currentPoint.X - _headerDragStart.X),
             Y = Math.Max(72, _modelStartY + currentPoint.Y - _headerDragStart.Y)
         };
-        var alignment = BoundsConstraint?.Invoke(Model, currentBounds, desiredBounds)
+        var alignment = BoundsConstraint?.Invoke(Model, currentBounds, desiredBounds, _snapHysteresis)
                         ?? new ZoneAlignmentResult(desiredBounds, null, null);
+        _snapHysteresis = new ZoneSnapHysteresis(alignment.VerticalGuide, alignment.HorizontalGuide);
         AlignmentGuidesChanged?.Invoke(alignment.VerticalGuide, alignment.HorizontalGuide);
         Model.X = alignment.Bounds.X;
         Model.Y = alignment.Bounds.Y;
@@ -777,6 +783,7 @@ public partial class ZoneCard : UserControl
         _draggingHeader = false;
         _capturedHeader?.ReleaseMouseCapture();
         _capturedHeader = null;
+        _snapHysteresis = default;
         AlignmentGuidesChanged?.Invoke(null, null);
         ModelChanged?.Invoke(this, EventArgs.Empty);
         e.Handled = true;
@@ -787,6 +794,7 @@ public partial class ZoneCard : UserControl
         _resizeStartBounds = GetVisualBounds();
         _resizeHorizontalChange = 0;
         _resizeVerticalChange = 0;
+        _snapHysteresis = default;
     }
 
     private void OnResizeDragDelta(object sender, DragDeltaEventArgs e)
@@ -800,8 +808,9 @@ public partial class ZoneCard : UserControl
         _resizeVerticalChange += e.VerticalChange;
         var currentBounds = GetVisualBounds();
         var desiredBounds = GetDesiredResizeBounds(direction);
-        var alignment = BoundsConstraint?.Invoke(Model, currentBounds, desiredBounds)
+        var alignment = BoundsConstraint?.Invoke(Model, currentBounds, desiredBounds, _snapHysteresis)
                         ?? new ZoneAlignmentResult(desiredBounds, null, null);
+        _snapHysteresis = new ZoneSnapHysteresis(alignment.VerticalGuide, alignment.HorizontalGuide);
         AlignmentGuidesChanged?.Invoke(alignment.VerticalGuide, alignment.HorizontalGuide);
         Model.X = alignment.Bounds.X;
         Model.Y = alignment.Bounds.Y;
@@ -816,6 +825,7 @@ public partial class ZoneCard : UserControl
 
     private void OnResizeDragCompleted(object sender, DragCompletedEventArgs e)
     {
+        _snapHysteresis = default;
         AlignmentGuidesChanged?.Invoke(null, null);
         if (Model.ViewMode == "List")
         {

@@ -1,5 +1,13 @@
 namespace DeskNest.Core.Services;
 
+/// <summary>Sticky-snap state carried between drag frames. While a guide value
+/// is present the resolver keeps snapping that edge to it until the pointer
+/// escapes a larger release distance, which prevents flicker near the snap
+/// threshold and jumping between adjacent guides.</summary>
+public readonly record struct ZoneSnapHysteresis(
+    double? VerticalGuide,
+    double? HorizontalGuide);
+
 public readonly record struct ZoneAlignmentResult(
     ZoneBounds Bounds,
     double? VerticalGuide,
@@ -21,27 +29,63 @@ public static class ZoneAlignmentResolver
         double minimumX,
         double minimumY,
         double maximumRight,
-        double maximumBottom)
+        double maximumBottom,
+        ZoneSnapHysteresis hysteresis = default,
+        double stickyEscapeDistance = 0)
     {
         var obstacleArray = obstacles.ToArray();
         var result = collisionSafe;
         double? verticalGuide = null;
         double? horizontalGuide = null;
 
-        var horizontalCandidate = FindHorizontalCandidate(
-            current, desired, result, obstacleArray, snapDistance, IsAvailable);
-        if (horizontalCandidate is { } horizontal)
+        var horizontalResolved = false;
+        if (hysteresis.VerticalGuide is { } stickyVertical)
         {
-            result = horizontal.Bounds;
-            verticalGuide = horizontal.Guide;
+            var sticky = FindStickyCandidate(
+                current, desired, result, obstacleArray, stickyVertical,
+                stickyEscapeDistance, minimumX, minimumY, maximumRight, maximumBottom, gap);
+            if (sticky is { } held)
+            {
+                result = held.Bounds;
+                verticalGuide = stickyVertical;
+                horizontalResolved = true;
+            }
         }
 
-        var verticalCandidate = FindVerticalCandidate(
-            current, desired, result, obstacleArray, snapDistance, IsAvailable);
-        if (verticalCandidate is { } vertical)
+        if (!horizontalResolved)
         {
-            result = vertical.Bounds;
-            horizontalGuide = vertical.Guide;
+            var horizontalCandidate = FindHorizontalCandidate(
+                current, desired, result, obstacleArray, snapDistance, IsAvailable);
+            if (horizontalCandidate is { } horizontal)
+            {
+                result = horizontal.Bounds;
+                verticalGuide = horizontal.Guide;
+            }
+        }
+
+        var verticalResolved = false;
+        if (hysteresis.HorizontalGuide is { } stickyHorizontal)
+        {
+            var sticky = FindStickyCandidateVertical(
+                current, desired, result, obstacleArray, stickyHorizontal,
+                stickyEscapeDistance, minimumX, minimumY, maximumRight, maximumBottom, gap);
+            if (sticky is { } held)
+            {
+                result = held.Bounds;
+                horizontalGuide = stickyHorizontal;
+                verticalResolved = true;
+            }
+        }
+
+        if (!verticalResolved)
+        {
+            var verticalCandidate = FindVerticalCandidate(
+                current, desired, result, obstacleArray, snapDistance, IsAvailable);
+            if (verticalCandidate is { } vertical)
+            {
+                result = vertical.Bounds;
+                horizontalGuide = vertical.Guide;
+            }
         }
 
         return new ZoneAlignmentResult(result, verticalGuide, horizontalGuide);
@@ -54,6 +98,98 @@ public static class ZoneAlignmentResolver
             minimumY,
             maximumRight,
             maximumBottom);
+    }
+
+    /// <summary>Keeps an already-held vertical (X-axis) guide while the pointer
+    /// stays within the escape distance, even if another guide is now closer.</summary>
+    private static SnapCandidate? FindStickyCandidate(
+        ZoneBounds current,
+        ZoneBounds desired,
+        ZoneBounds constrained,
+        IReadOnlyList<ZoneBounds> obstacles,
+        double guide,
+        double escapeDistance,
+        double minimumX,
+        double minimumY,
+        double maximumRight,
+        double maximumBottom,
+        double gap)
+    {
+        var isMove = NearlyEqual(current.Width, desired.Width) &&
+                     NearlyEqual(current.Height, desired.Height);
+
+        SnapCandidate? best = null;
+        if (Math.Abs(desired.X - guide) <= escapeDistance)
+        {
+            Consider(new ZoneBounds(guide, constrained.Y, constrained.Width, constrained.Height));
+        }
+
+        if (best is null && Math.Abs(desired.Right - guide) <= escapeDistance)
+        {
+            Consider(new ZoneBounds(guide - constrained.Width, constrained.Y, constrained.Width, constrained.Height));
+        }
+
+        return best;
+
+        void Consider(ZoneBounds bounds)
+        {
+            if ((!isMove && bounds.X < minimumX - Tolerance) ||
+                bounds.Right > maximumRight + Tolerance ||
+                (!isMove && bounds.Width < MinimumWidth - Tolerance) ||
+                !ZoneCollisionResolver.IsAvailable(
+                    bounds, obstacles, gap, minimumX, minimumY, maximumRight, maximumBottom))
+            {
+                return;
+            }
+
+            best = new SnapCandidate(bounds, guide, 0);
+        }
+    }
+
+    /// <summary>Keeps an already-held horizontal (Y-axis) guide; mirror of
+    /// <see cref="FindStickyCandidate"/>.</summary>
+    private static SnapCandidate? FindStickyCandidateVertical(
+        ZoneBounds current,
+        ZoneBounds desired,
+        ZoneBounds constrained,
+        IReadOnlyList<ZoneBounds> obstacles,
+        double guide,
+        double escapeDistance,
+        double minimumX,
+        double minimumY,
+        double maximumRight,
+        double maximumBottom,
+        double gap)
+    {
+        var isMove = NearlyEqual(current.Width, desired.Width) &&
+                     NearlyEqual(current.Height, desired.Height);
+
+        SnapCandidate? best = null;
+        if (Math.Abs(desired.Y - guide) <= escapeDistance)
+        {
+            Consider(new ZoneBounds(constrained.X, guide, constrained.Width, constrained.Height));
+        }
+
+        if (best is null && Math.Abs(desired.Bottom - guide) <= escapeDistance)
+        {
+            Consider(new ZoneBounds(constrained.X, guide - constrained.Height, constrained.Width, constrained.Height));
+        }
+
+        return best;
+
+        void Consider(ZoneBounds bounds)
+        {
+            if ((!isMove && bounds.Y < minimumY - Tolerance) ||
+                bounds.Bottom > maximumBottom + Tolerance ||
+                (!isMove && bounds.Height < MinimumHeight - Tolerance) ||
+                !ZoneCollisionResolver.IsAvailable(
+                    bounds, obstacles, gap, minimumX, minimumY, maximumRight, maximumBottom))
+            {
+                return;
+            }
+
+            best = new SnapCandidate(bounds, guide, 0);
+        }
     }
 
     private static SnapCandidate? FindHorizontalCandidate(

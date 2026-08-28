@@ -359,6 +359,38 @@ var tests = new List<(string Name, Action Run)>
         Assert.Near(88, result.Bounds.X, 0.1);
         Assert.Equal<double?>(null, result.VerticalGuide);
     }),
+    ("zone alignment keeps a sticky guide within the escape distance", () =>
+    {
+        var current = new ZoneBounds(20, 400, 200, 200);
+        var desired = new ZoneBounds(112, 400, 200, 200);
+        var obstacles = new[]
+        {
+            new ZoneBounds(100, 72, 200, 200),
+            new ZoneBounds(320, 72, 200, 200)
+        };
+        var hysteresis = new ZoneSnapHysteresis(100, null);
+        var result = ZoneAlignmentResolver.Snap(
+            current, desired, desired, obstacles, 10, 12, 0, 72, 1200, 900,
+            hysteresis, 16);
+
+        // 12px past the held guide (outside the 10px snap threshold) and with
+        // a closer alternative guide, the held guide still wins.
+        Assert.Near(100, result.Bounds.X, 0.1);
+        Assert.Near(100, result.VerticalGuide ?? -1, 0.1);
+    }),
+    ("zone alignment releases a sticky guide beyond the escape distance", () =>
+    {
+        var current = new ZoneBounds(20, 400, 200, 200);
+        var desired = new ZoneBounds(118, 400, 200, 200);
+        var obstacle = new ZoneBounds(100, 72, 200, 200);
+        var hysteresis = new ZoneSnapHysteresis(100, null);
+        var result = ZoneAlignmentResolver.Snap(
+            current, desired, desired, new[] { obstacle }, 10, 12, 0, 72, 1200, 900,
+            hysteresis, 16);
+
+        Assert.Near(118, result.Bounds.X, 0.1);
+        Assert.Equal<double?>(null, result.VerticalGuide);
+    }),
     ("state store round-trips state", () =>
     {
         WithTempDirectory(root =>
