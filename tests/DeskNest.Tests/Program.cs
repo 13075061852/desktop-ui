@@ -297,6 +297,23 @@ var tests = new List<(string Name, Action Run)>
         Assert.Near(220, result.Obstacles[0].Width, 0.1);
         Assert.Near(220, result.Obstacles[1].Width, 0.1);
     }),
+    ("expansion sweep carries swept-over neighbours instead of covering them", () =>
+    {
+        // Mirror of a real session: stretching the left zone rightwards while
+        // its edge already sits over the neighbour's left half.
+        var current = new ZoneBounds(13, 72, 339, 727);
+        var folder = new ZoneBounds(267, 293, 238, 507);
+        var remote = new ZoneBounds(373, 72, 150, 222);
+        var desired = current with { Width = 487 };
+        var result = ZoneStackResizeResolver.ReflowAdjacent(
+            current, desired, new[] { folder, remote }, 12, 150, 150, 0, 72, 1200, 900);
+
+        // Both zones in the sweep path ride ahead of the target edge by the
+        // standard gap instead of being covered.
+        Assert.Near(512, result.Obstacles[0].X, 0.1);
+        Assert.Near(618, result.Obstacles[1].X, 0.1);
+        Assert.Near(500, result.Desired.Right, 0.1);
+    }),
     ("zone alignment snaps moving edges within ten pixels", () =>
     {
         var current = new ZoneBounds(20, 400, 200, 200);

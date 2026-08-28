@@ -87,12 +87,24 @@ public static class ZoneStackResizeResolver
             }
         }
 
-        var requestedMovement = GetExpansionAmount(direction, current, desired);
-        var availableMovement = requestedMovement;
+        // The group moves as one block just far enough that no member is
+        // overlapped by the target edge - that can exceed the pointer's
+        // expansion amount when the dragged edge sweeps over a neighbour.
+        var pushNeeded = 0d;
+        var movementLimit = double.PositiveInfinity;
         foreach (var index in pushGroup)
         {
             var bounds = obstacles[index];
-            availableMovement = Math.Min(availableMovement, GetBoundarySpace(
+            pushNeeded = direction switch
+            {
+                ExpansionDirection.Right => Math.Max(pushNeeded, desired.Right + gap - bounds.X),
+                ExpansionDirection.Left => Math.Max(pushNeeded, bounds.Right + gap - desired.X),
+                ExpansionDirection.Bottom => Math.Max(pushNeeded, desired.Bottom + gap - bounds.Y),
+                ExpansionDirection.Top => Math.Max(pushNeeded, bounds.Bottom + gap - desired.Y),
+                _ => pushNeeded
+            };
+
+            movementLimit = Math.Min(movementLimit, GetBoundarySpace(
                 direction, bounds, minimumX, minimumY, maximumRight, maximumBottom));
 
             for (var otherIndex = 0; otherIndex < obstacles.Count; otherIndex++)
@@ -102,12 +114,12 @@ public static class ZoneStackResizeResolver
                     continue;
                 }
 
-                availableMovement = Math.Min(availableMovement,
+                movementLimit = Math.Min(movementLimit,
                     GetSpaceBeforeObstacle(direction, bounds, obstacles[otherIndex], gap));
             }
         }
 
-        var movement = Math.Clamp(availableMovement, 0, requestedMovement);
+        var movement = Math.Clamp(pushNeeded, 0, Math.Max(0, movementLimit));
         var shifted = obstacles.ToArray();
         foreach (var index in pushGroup)
         {
@@ -142,13 +154,19 @@ public static class ZoneStackResizeResolver
         double gap,
         double tolerance) => direction switch
         {
-            ExpansionDirection.Right => Math.Abs(obstacle.X - (current.Right + gap)) <= tolerance &&
+            // Anything standing in the sweep path of the expanding edge joins
+            // the push group, even if the pointer has already swept over it.
+            ExpansionDirection.Right => obstacle.Right > current.Right + tolerance &&
+                                        obstacle.X - gap < desired.Right + tolerance &&
                                         OverlapsVertically(desired, obstacle),
-            ExpansionDirection.Left => Math.Abs(obstacle.Right + gap - current.X) <= tolerance &&
+            ExpansionDirection.Left => obstacle.X < current.X - tolerance &&
+                                       obstacle.Right + gap > desired.X - tolerance &&
                                        OverlapsVertically(desired, obstacle),
-            ExpansionDirection.Bottom => Math.Abs(obstacle.Y - (current.Bottom + gap)) <= tolerance &&
-                                         OverlapsHorizontally(desired, obstacle),
-            ExpansionDirection.Top => Math.Abs(obstacle.Bottom + gap - current.Y) <= tolerance &&
+            ExpansionDirection.Bottom => obstacle.Bottom > current.Bottom + tolerance &&
+                                          obstacle.Y - gap < desired.Bottom + tolerance &&
+                                          OverlapsHorizontally(desired, obstacle),
+            ExpansionDirection.Top => obstacle.Y < current.Y - tolerance &&
+                                      obstacle.Bottom + gap > desired.Y - tolerance &&
                                       OverlapsHorizontally(desired, obstacle),
             _ => false
         };
