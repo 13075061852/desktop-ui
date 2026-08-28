@@ -108,6 +108,16 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool SetForegroundWindow(nint window);
+
+    [DllImport("user32.dll")]
+    internal static extern void keybd_event(byte virtualKey, byte scanCode, uint flags, nint extraInfo);
+
+    internal const byte VirtualKeyMenu = 0x12;
+    internal const uint KeyEventFKeyUp = 0x0002;
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool IsWindow(nint window);
 
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]

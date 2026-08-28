@@ -1099,6 +1099,25 @@ public partial class ZoneCard : UserControl
 
     private void BeginRename()
     {
+        // The desktop overlay carries WS_EX_NOACTIVATE, so clicking the card
+        // never activates the window and the inline editor would never
+        // receive keystrokes. This process does not own the foreground either,
+        // so a plain SetForegroundWindow is blocked by the foreground lock;
+        // tapping Alt first unlocks the switch.
+        if (Window.GetWindow(this) is { } window)
+        {
+            var handle = new WindowInteropHelper(window).Handle;
+            if (handle != nint.Zero)
+            {
+                NativeMethods.keybd_event(NativeMethods.VirtualKeyMenu, 0, 0, nint.Zero);
+                NativeMethods.keybd_event(
+                    NativeMethods.VirtualKeyMenu, 0, NativeMethods.KeyEventFKeyUp, nint.Zero);
+                NativeMethods.SetForegroundWindow(handle);
+            }
+
+            window.Activate();
+        }
+
         TitleEditor.Text = Model.Name;
         TitleText.Visibility = Visibility.Collapsed;
         TitleEditor.Visibility = Visibility.Visible;
