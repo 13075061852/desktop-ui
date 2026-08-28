@@ -369,12 +369,24 @@ public partial class MainWindow
         RequestSave();
     }
 
+    /// <summary>Right edge a zone may reach (window width minus the desktop inset).</summary>
+    private double MaximumZoneRight => Math.Max(
+        ZoneCard.HorizontalDesktopInset + 1,
+        ActualWidth - ZoneCard.HorizontalDesktopInset);
+
+    /// <summary>Bottom edge a zone may reach: work area bottom (above the taskbar)
+    /// minus the desktop inset, matching ConstrainZoneBounds.</summary>
+    private double MaximumZoneBottom => Math.Max(
+        73,
+        Math.Min(ActualHeight, SystemParameters.WorkArea.Bottom - Top)
+        - ZoneCard.HorizontalDesktopInset);
+
     /// <summary>
-    /// Redistributes the horizontal space of a side-by-side pair. The pair's
-    /// outer edges stay anchored (left edge of the left zone, right edge of
-    /// the right zone); dragging the line only moves the split point, so one
-    /// zone grows exactly as much as the other shrinks. The line clamps at
-    /// the pair's minimum sizes.
+    /// Moves a side-by-side pair along the horizontal axis. <paramref name="offset"/>
+    /// is the absolute pointer travel since the drag started (positive = right).
+    /// Phase 1 redistributes space with the pair's outer edges anchored; once
+    /// the squeezed zone reaches its minimum width, phase 2 translates the
+    /// whole pair until the moving outer edge reaches the window boundary.
     /// </summary>
     private void MoveSideBySidePair(SplitterDragState drag, double offset)
     {
@@ -382,53 +394,81 @@ public partial class MainWindow
         var second = drag.SecondStart;
 
         var midGapStart = second.X - drag.Gap / 2;
-        var anchorLeft = first.X;
-        var anchorRight = second.Right;
+        var minMid = first.X + SplitterMinimumWidth + drag.Gap / 2;
+        var maxMid = second.Right - SplitterMinimumWidth - drag.Gap / 2;
 
-        var minMid = anchorLeft + SplitterMinimumWidth + drag.Gap / 2;
-        var maxMid = anchorRight - SplitterMinimumWidth - drag.Gap / 2;
-        var mid = Math.Clamp(midGapStart + offset, minMid, maxMid);
+        var desiredMid = midGapStart + offset;
+        var mid = Math.Clamp(desiredMid, minMid, maxMid);
+        var translate = desiredMid - mid;
 
-        var newFirstWidth = mid - drag.Gap / 2 - anchorLeft;
-        var newSecondX = mid + drag.Gap / 2;
-        var newSecondWidth = anchorRight - newSecondX;
+        var shift = 0d;
+        if (translate > 0)
+        {
+            shift = Math.Min(translate, MaximumZoneRight - second.Right);
+        }
+        else if (translate < 0)
+        {
+            shift = Math.Max(translate, ZoneCard.HorizontalDesktopInset - first.X);
+        }
 
-        if (newFirstWidth.ApproximatelyEquals(first.Width) &&
+        var lineMid = mid + shift;
+        var newFirstX = first.X + shift;
+        var newFirstWidth = lineMid - drag.Gap / 2 - newFirstX;
+        var newSecondX = lineMid + drag.Gap / 2;
+        var newSecondWidth = second.Right + shift - newSecondX;
+
+        if (newFirstX.ApproximatelyEquals(first.X) &&
+            newFirstWidth.ApproximatelyEquals(first.Width) &&
             newSecondWidth.ApproximatelyEquals(second.Width))
         {
             return;
         }
 
-        ApplyZoneVisualBounds(drag.First, new ZoneBounds(anchorLeft, first.Y, newFirstWidth, first.Height));
+        ApplyZoneVisualBounds(drag.First, new ZoneBounds(newFirstX, first.Y, newFirstWidth, first.Height));
         ApplyZoneVisualBounds(drag.Second, new ZoneBounds(newSecondX, second.Y, newSecondWidth, second.Height));
     }
 
     /// <summary>Redistributes the vertical space of a stacked pair; same contract
-    /// as <see cref="MoveSideBySidePair"/> with the top and bottom edges anchored.</summary>
+    /// as <see cref="MoveSideBySidePair"/>: anchored redistribution first, then a
+    /// whole-pair translate towards the work-area boundaries.</summary>
     private void MoveStackedPair(SplitterDragState drag, double offset)
     {
         var first = drag.FirstStart;
         var second = drag.SecondStart;
+        const double minimumY = 72;
 
         var midGapStart = second.Y - drag.Gap / 2;
-        var anchorTop = first.Y;
-        var anchorBottom = second.Bottom;
+        var minMid = first.Y + SplitterMinimumHeight + drag.Gap / 2;
+        var maxMid = second.Bottom - SplitterMinimumHeight - drag.Gap / 2;
 
-        var minMid = anchorTop + SplitterMinimumHeight + drag.Gap / 2;
-        var maxMid = anchorBottom - SplitterMinimumHeight - drag.Gap / 2;
-        var mid = Math.Clamp(midGapStart + offset, minMid, maxMid);
+        var desiredMid = midGapStart + offset;
+        var mid = Math.Clamp(desiredMid, minMid, maxMid);
+        var translate = desiredMid - mid;
 
-        var newFirstHeight = mid - drag.Gap / 2 - anchorTop;
-        var newSecondY = mid + drag.Gap / 2;
-        var newSecondHeight = anchorBottom - newSecondY;
+        var shift = 0d;
+        if (translate > 0)
+        {
+            shift = Math.Min(translate, MaximumZoneBottom - second.Bottom);
+        }
+        else if (translate < 0)
+        {
+            shift = Math.Max(translate, minimumY - first.Y);
+        }
 
-        if (newFirstHeight.ApproximatelyEquals(first.Height) &&
+        var lineMid = mid + shift;
+        var newFirstY = first.Y + shift;
+        var newFirstHeight = lineMid - drag.Gap / 2 - newFirstY;
+        var newSecondY = lineMid + drag.Gap / 2;
+        var newSecondHeight = second.Bottom + shift - newSecondY;
+
+        if (newFirstY.ApproximatelyEquals(first.Y) &&
+            newFirstHeight.ApproximatelyEquals(first.Height) &&
             newSecondHeight.ApproximatelyEquals(second.Height))
         {
             return;
         }
 
-        ApplyZoneVisualBounds(drag.First, new ZoneBounds(first.X, anchorTop, first.Width, newFirstHeight));
+        ApplyZoneVisualBounds(drag.First, new ZoneBounds(first.X, newFirstY, first.Width, newFirstHeight));
         ApplyZoneVisualBounds(drag.Second, new ZoneBounds(second.X, newSecondY, second.Width, newSecondHeight));
     }
 

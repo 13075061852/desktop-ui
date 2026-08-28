@@ -603,13 +603,8 @@ public partial class MainWindow : System.Windows.Window
 
         var minimumX = ZoneCard.HorizontalDesktopInset;
         const double minimumY = 72;
-        var maximumRight = Math.Max(minimumX + 1, ActualWidth - ZoneCard.HorizontalDesktopInset);
-        // Zones must stay above the taskbar, so the bottom limit is the work
-        // area's bottom edge (screen minus taskbar) minus the desktop inset.
-        var workAreaBottom = SystemParameters.WorkArea.Bottom - Top;
-        var maximumBottom = Math.Max(
-            minimumY + 1,
-            Math.Min(ActualHeight, workAreaBottom) - ZoneCard.HorizontalDesktopInset);
+        var maximumRight = MaximumZoneRight;
+        var maximumBottom = Math.Max(minimumY + 1, MaximumZoneBottom);
 
         var stackResize = ZoneStackResizeResolver.ReflowAdjacent(
             current,
@@ -726,11 +721,7 @@ public partial class MainWindow : System.Windows.Window
         var minimumX = ZoneCard.HorizontalDesktopInset;
         var desktopWidth = ActualWidth > 0 ? ActualWidth : SystemParameters.VirtualScreenWidth;
         var maximumRight = Math.Max(minimumX + 1, desktopWidth - ZoneCard.HorizontalDesktopInset);
-        var desktopHeight = ActualHeight > 0 ? ActualHeight : SystemParameters.VirtualScreenHeight;
-        var normalizedWorkAreaBottom = SystemParameters.WorkArea.Bottom - Top;
-        var maximumBottom = Math.Max(
-            73,
-            Math.Min(desktopHeight, normalizedWorkAreaBottom) - ZoneCard.HorizontalDesktopInset);
+        var maximumBottom = Math.Max(73, MaximumZoneBottom);
         var adjusted = false;
 
         if (_state.Zones.Count > 0)
