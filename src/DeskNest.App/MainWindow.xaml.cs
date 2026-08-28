@@ -604,7 +604,12 @@ public partial class MainWindow : System.Windows.Window
         var minimumX = ZoneCard.HorizontalDesktopInset;
         const double minimumY = 72;
         var maximumRight = Math.Max(minimumX + 1, ActualWidth - ZoneCard.HorizontalDesktopInset);
-        var maximumBottom = Math.Max(minimumY + 1, ActualHeight - ZoneCard.HorizontalDesktopInset);
+        // Zones must stay above the taskbar, so the bottom limit is the work
+        // area's bottom edge (screen minus taskbar) minus the desktop inset.
+        var workAreaBottom = SystemParameters.WorkArea.Bottom - Top;
+        var maximumBottom = Math.Max(
+            minimumY + 1,
+            Math.Min(ActualHeight, workAreaBottom) - ZoneCard.HorizontalDesktopInset);
 
         var stackResize = ZoneStackResizeResolver.ReflowAdjacent(
             current,
@@ -722,7 +727,10 @@ public partial class MainWindow : System.Windows.Window
         var desktopWidth = ActualWidth > 0 ? ActualWidth : SystemParameters.VirtualScreenWidth;
         var maximumRight = Math.Max(minimumX + 1, desktopWidth - ZoneCard.HorizontalDesktopInset);
         var desktopHeight = ActualHeight > 0 ? ActualHeight : SystemParameters.VirtualScreenHeight;
-        var maximumBottom = Math.Max(73, desktopHeight - ZoneCard.HorizontalDesktopInset);
+        var normalizedWorkAreaBottom = SystemParameters.WorkArea.Bottom - Top;
+        var maximumBottom = Math.Max(
+            73,
+            Math.Min(desktopHeight, normalizedWorkAreaBottom) - ZoneCard.HorizontalDesktopInset);
         var adjusted = false;
 
         if (_state.Zones.Count > 0)
@@ -744,6 +752,24 @@ public partial class MainWindow : System.Windows.Window
 
                 adjusted = true;
             }
+
+            var topmost = _state.Zones.Min(zone => zone.Y);
+            var bottommost = _state.Zones.Max(zone => zone.Y + (zone.IsCollapsed ? 52 : zone.Height));
+            var verticalShift = topmost < 72
+                ? 72 - topmost
+                : bottommost > maximumBottom
+                    ? maximumBottom - bottommost
+                    : 0;
+            if (Math.Abs(verticalShift) > 0.01 &&
+                topmost + verticalShift >= 72 && bottommost + verticalShift <= maximumBottom)
+            {
+                foreach (var zone in _state.Zones)
+                {
+                    zone.Y += verticalShift;
+                }
+
+                adjusted = true;
+            }
         }
 
         var placed = new List<ZoneBounds>();
@@ -751,6 +777,34 @@ public partial class MainWindow : System.Windows.Window
         foreach (var zone in _state.Zones)
         {
             var bounds = GetVisualBounds(zone);
+            // Prefer clamping an out-of-bounds zone back inside the desktop
+            // over re-placing it: a tiny overflow (a few pixels saved before a
+            // constraint change) should nudge the zone, not shuffle the board.
+            var clamped = false;
+            if (bounds.Right > maximumRight)
+            {
+                zone.X = Math.Max(minimumX, maximumRight - bounds.Width);
+                bounds = GetVisualBounds(zone);
+                clamped = true;
+            }
+            if (bounds.Bottom > maximumBottom)
+            {
+                zone.Y = Math.Max(72, maximumBottom - bounds.Height);
+                bounds = GetVisualBounds(zone);
+                clamped = true;
+            }
+
+            if (clamped)
+            {
+                // Accept the clamped zone even if the gap to a neighbour
+                // shrinks a pixel below the standard spacing; the alternative
+                // re-placement scan would shuffle the whole board over a
+                // trivial overflow.
+                adjusted = true;
+                placed.Add(bounds);
+                continue;
+            }
+
             if (ZoneCollisionResolver.IsAvailable(bounds, placed, 12, minimumX, 72, maximumRight, maximumBottom))
             {
                 placed.Add(bounds);
