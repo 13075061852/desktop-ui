@@ -638,6 +638,45 @@ public partial class ZoneCard : UserControl
         }
     }
 
+    /// <summary>Pushes the submenu of a MenuItem a few pixels away from the parent
+    /// menu so the two levels do not sit flush against each other.</summary>
+    private static void AddSubmenuGap(MenuItem item, double gap)
+    {
+        item.SubmenuOpened += (_, _) =>
+        {
+            try
+            {
+                if (FindSubmenuPopup(item) is { } popup)
+                {
+                    popup.HorizontalOffset = gap;
+                }
+            }
+            catch
+            {
+                // Cosmetic only; never break menu opening.
+            }
+        };
+    }
+
+    private static Popup? FindSubmenuPopup(DependencyObject root)
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is Popup popup)
+            {
+                return popup;
+            }
+
+            if (FindSubmenuPopup(child) is { } nested)
+            {
+                return nested;
+            }
+        }
+
+        return null;
+    }
+
     private ContextMenu RegisterTransientMenu(ContextMenu menu)
     {
         menu.StaysOpen = false;
@@ -1000,7 +1039,11 @@ public partial class ZoneCard : UserControl
 
         var menu = new ContextMenu
         {
-            Placement = PlacementMode.MousePoint,
+            // PlacementTarget + Mouse keeps submenus (新建/显示方式) aligned beside their
+            // parent item. Plain MousePoint breaks submenu placement in layered windows,
+            // opening the submenu too high.
+            PlacementTarget = this,
+            Placement = PlacementMode.Mouse,
             StaysOpen = false
         };
         var newMenu = new MenuItem { Header = "新建" };
@@ -1022,8 +1065,52 @@ public partial class ZoneCard : UserControl
                 new ShellNewRequestedEventArgs(definition));
             newMenu.Items.Add(templateMenuItem);
         }
+        AddSubmenuGap(newMenu, 10);
+
+        var rename = new MenuItem { Header = "重命名分区" };
+        rename.Click += (_, _) => BeginRename();
+        var collapse = new MenuItem { Header = Model.IsCollapsed ? "展开分区" : "折叠分区" };
+        collapse.Click += (_, _) => OnCollapseClick(sender, e);
+        var viewMode = new MenuItem { Header = "显示方式" };
+        var iconMode = new MenuItem
+        {
+            Header = "图标",
+            IsCheckable = true,
+            IsChecked = Model.ViewMode != "List"
+        };
+        iconMode.Click += (_, _) => SetViewMode("Icons");
+        var listMode = new MenuItem
+        {
+            Header = "列表",
+            IsCheckable = true,
+            IsChecked = Model.ViewMode == "List"
+        };
+        listMode.Click += (_, _) => SetViewMode("List");
+        viewMode.Items.Add(iconMode);
+        viewMode.Items.Add(listMode);
+        AddSubmenuGap(viewMode, 10);
+        var clear = new MenuItem { Header = "清空映射" };
+        clear.Click += (_, _) =>
+        {
+            Model.Items.Clear();
+            RenderItems();
+            ModelChanged?.Invoke(this, EventArgs.Empty);
+        };
+        var delete = new MenuItem
+        {
+            Header = "删除分区",
+            Foreground = (Brush)FindResource("DangerBrush")
+        };
+        delete.Click += (_, _) => DeleteRequested?.Invoke(this, EventArgs.Empty);
 
         menu.Items.Add(newMenu);
+        menu.Items.Add(new Separator());
+        menu.Items.Add(rename);
+        menu.Items.Add(collapse);
+        menu.Items.Add(viewMode);
+        menu.Items.Add(clear);
+        menu.Items.Add(new Separator());
+        menu.Items.Add(delete);
         RegisterTransientMenu(menu);
         menu.IsOpen = true;
         e.Handled = true;
@@ -1051,6 +1138,7 @@ public partial class ZoneCard : UserControl
         listMode.Click += (_, _) => SetViewMode("List");
         viewMode.Items.Add(iconMode);
         viewMode.Items.Add(listMode);
+        AddSubmenuGap(viewMode, 10);
 
         var clear = new MenuItem { Header = "清空映射" };
         clear.Click += (_, _) =>
@@ -1067,6 +1155,7 @@ public partial class ZoneCard : UserControl
         menu.Items.Add(new Separator());
         menu.Items.Add(delete);
         menu.PlacementTarget = MoreButton;
+        menu.Placement = PlacementMode.Bottom;
         RegisterTransientMenu(menu);
         menu.IsOpen = true;
     }
@@ -1277,6 +1366,16 @@ public partial class ZoneCard : UserControl
 
     private void StartDragPreview(DesktopItem item, FrameworkElement sourceElement)
     {
+        // A settle can be interrupted by a rebuild or deactivation. Never let a stuck
+        // settle swallow later drags or leave displaced tiles frozen in place.
+        if (_settleInProgress)
+        {
+            _settleInProgress = false;
+            _pendingCompletedArgs = null;
+            LiveItemDragSession.Reset();
+            ClearLiveReflowTransforms();
+        }
+
         _dropCommitted = false;
         _lastPlacement = null;
         _activeReflowPayload = null;
@@ -1362,17 +1461,25 @@ public partial class ZoneCard : UserControl
         // destination card commit the model reorder so the rebuilt layout matches the landing.
         AnimatePreviewTo(slotCenterDip, TimeSpan.FromMilliseconds(270), () =>
         {
-            StopDragPreview();
-            ClearLiveReflowTransforms();
-            DragPreviewEnded?.Invoke();
-            LiveItemDragSession.SettleCompleted?.Invoke();
-            LiveItemDragSession.Reset();
-            _settleInProgress = false;
-            var completed = _pendingCompletedArgs;
-            _pendingCompletedArgs = null;
-            if (completed is not null)
+            try
             {
-                ItemDragCompleted?.Invoke(this, completed);
+                StopDragPreview();
+                ClearLiveReflowTransforms();
+                DragPreviewEnded?.Invoke();
+                LiveItemDragSession.SettleCompleted?.Invoke();
+            }
+            finally
+            {
+                // Always clear the settle state even if a callback above throws; a stuck
+                // settle would otherwise freeze the card's reorder forever.
+                LiveItemDragSession.Reset();
+                _settleInProgress = false;
+                var completed = _pendingCompletedArgs;
+                _pendingCompletedArgs = null;
+                if (completed is not null)
+                {
+                    ItemDragCompleted?.Invoke(this, completed);
+                }
             }
         });
     }
