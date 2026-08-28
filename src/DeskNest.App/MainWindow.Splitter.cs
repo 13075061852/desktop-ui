@@ -46,6 +46,17 @@ public partial class MainWindow
         public bool DragActive;
     }
 
+    /// <summary>A bystander zone whose edge sits on the splitter line; it rides
+    /// along with the pair translation so the whole column/row stays aligned.</summary>
+    private sealed class SplitterRider
+    {
+        public required ZoneModel Zone;
+
+        /// <summary>Shift value at the moment this rider attached; only the
+        /// shift accumulated afterwards moves the rider.</summary>
+        public double AppliedShift;
+    }
+
     private sealed class SplitterDragState
     {
         public required ZoneSplitterRail Rail;
@@ -59,7 +70,13 @@ public partial class MainWindow
         /// <summary>Total pointer travel since drag start. DragDelta reports per-event
         /// deltas, so they must be accumulated to get an absolute drag position.</summary>
         public double AccumulatedOffset;
+
+        /// <summary>Bystander zones riding the line; collected at drag start and
+        /// whenever the moving line sweeps over another zone's edge.</summary>
+        public List<SplitterRider> Riders { get; } = new();
     }
+
+    private const double RiderAttachTolerance = 3;
 
     private static ControlTemplate CreateInvisibleThumbTemplate()
     {
@@ -325,7 +342,113 @@ public partial class MainWindow
             FirstStart = GetVisualBounds(first),
             SecondStart = GetVisualBounds(second)
         };
+        CollectRiders(_splitterDrag);
     }
+
+    private void CollectRiders(SplitterDragState drag)
+    {
+        var secondEdge = drag.IsHorizontalLine ? drag.SecondStart.Y : drag.SecondStart.X;
+        var firstEdge = drag.IsHorizontalLine ? drag.FirstStart.Bottom : drag.FirstStart.Right;
+        foreach (var zone in _state.Zones)
+        {
+            TryAttachRider(drag, zone, secondEdge, firstEdge, 0);
+        }
+    }
+
+    private void TryAttachRider(
+        SplitterDragState drag,
+        ZoneModel zone,
+        double secondEdge,
+        double firstEdge,
+        double currentShift)
+    {
+        if (zone.Id == drag.First.Id || zone.Id == drag.Second.Id || zone.IsCollapsed)
+        {
+            return;
+        }
+
+        if (drag.Riders.Any(rider => rider.Zone.Id == zone.Id))
+        {
+            return;
+        }
+
+        var bounds = GetVisualBounds(zone);
+        var onSecondSide = Math.Abs(
+            (drag.IsHorizontalLine ? bounds.Y : bounds.X) - secondEdge) <= RiderAttachTolerance;
+        var onFirstSide = !onSecondSide && Math.Abs(
+            (drag.IsHorizontalLine ? bounds.Bottom : bounds.Right) - firstEdge) <= RiderAttachTolerance;
+        if (onSecondSide || onFirstSide)
+        {
+            drag.Riders.Add(new SplitterRider
+            {
+                Zone = zone,
+                AppliedShift = currentShift
+            });
+        }
+    }
+
+    private void MoveRidersWithLine(SplitterDragState drag, double lineMid, double shift)
+    {
+        // The line is a full-height/width grid line: any zone whose edge sits
+        // on it - from drag start or swept over mid-drag - rides along with
+        // the pair translation, keeping its relative position.
+        var secondEdge = lineMid + drag.Gap / 2;
+        var firstEdge = lineMid - drag.Gap / 2;
+        foreach (var zone in _state.Zones)
+        {
+            TryAttachRider(drag, zone, secondEdge, firstEdge, shift);
+        }
+
+        foreach (var rider in drag.Riders)
+        {
+            var delta = shift - rider.AppliedShift;
+            if (Math.Abs(delta) < 0.01)
+            {
+                continue;
+            }
+
+            var bounds = GetVisualBounds(rider.Zone);
+            ZoneBounds candidate;
+            if (drag.IsHorizontalLine)
+            {
+                var y = Math.Clamp(
+                    bounds.Y + delta,
+                    72,
+                    Math.Max(73, MaximumZoneBottom - bounds.Height));
+                candidate = new ZoneBounds(bounds.X, y, bounds.Width, bounds.Height);
+            }
+            else
+            {
+                var x = Math.Clamp(
+                    bounds.X + delta,
+                    ZoneCard.HorizontalDesktopInset,
+                    Math.Max(ZoneCard.HorizontalDesktopInset + 1, MaximumZoneRight - bounds.Width));
+                candidate = new ZoneBounds(x, bounds.Y, bounds.Width, bounds.Height);
+            }
+
+            // If the ride ran out of room (everything piled at a boundary),
+            // stay put and keep following once space frees up again.
+            var blocked = _state.Zones.Any(other =>
+                other.Id != rider.Zone.Id &&
+                !other.IsCollapsed &&
+                Intersects(candidate, GetVisualBounds(other)));
+            if (blocked)
+            {
+                continue;
+            }
+
+            rider.AppliedShift = shift;
+            ApplyZoneVisualBounds(rider.Zone, candidate);
+        }
+    }
+
+    private static bool Intersects(ZoneBounds first, ZoneBounds second) =>
+        first.X < second.Right - ToleranceValue &&
+        first.Right > second.X + ToleranceValue &&
+        first.Y < second.Bottom - ToleranceValue &&
+        first.Bottom > second.Y + ToleranceValue;
+
+    private const double ToleranceValue = 0.01;
 
     private void OnSplitterDragDelta(object sender, DragDeltaEventArgs e)
     {
@@ -426,6 +549,7 @@ public partial class MainWindow
 
         ApplyZoneVisualBounds(drag.First, new ZoneBounds(newFirstX, first.Y, newFirstWidth, first.Height));
         ApplyZoneVisualBounds(drag.Second, new ZoneBounds(newSecondX, second.Y, newSecondWidth, second.Height));
+        MoveRidersWithLine(drag, lineMid, shift);
     }
 
     /// <summary>Redistributes the vertical space of a stacked pair; same contract
@@ -470,6 +594,7 @@ public partial class MainWindow
 
         ApplyZoneVisualBounds(drag.First, new ZoneBounds(first.X, newFirstY, first.Width, newFirstHeight));
         ApplyZoneVisualBounds(drag.Second, new ZoneBounds(second.X, newSecondY, second.Width, newSecondHeight));
+        MoveRidersWithLine(drag, lineMid, shift);
     }
 
     private void ApplyZoneVisualBounds(ZoneModel zone, ZoneBounds bounds)
