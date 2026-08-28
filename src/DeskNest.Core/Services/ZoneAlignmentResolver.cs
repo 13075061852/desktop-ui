@@ -101,7 +101,9 @@ public static class ZoneAlignmentResolver
     }
 
     /// <summary>Keeps an already-held vertical (X-axis) guide while the pointer
-    /// stays within the escape distance, even if another guide is now closer.</summary>
+    /// stays within the escape distance, even if another guide is now closer.
+    /// Honours which edge is actually moving so a resize never gets swallowed
+    /// by a guide that happens to sit near the stationary edge.</summary>
     private static SnapCandidate? FindStickyCandidate(
         ZoneBounds current,
         ZoneBounds desired,
@@ -117,16 +119,21 @@ public static class ZoneAlignmentResolver
     {
         var isMove = NearlyEqual(current.Width, desired.Width) &&
                      NearlyEqual(current.Height, desired.Height);
+        var leftChanged = isMove || !NearlyEqual(current.X, desired.X);
+        var rightChanged = isMove || !NearlyEqual(current.Right, desired.Right);
 
         SnapCandidate? best = null;
-        if (Math.Abs(desired.X - guide) <= escapeDistance)
+        if (leftChanged && Math.Abs(desired.X - guide) <= escapeDistance)
         {
-            Consider(new ZoneBounds(guide, constrained.Y, constrained.Width, constrained.Height));
+            var width = isMove ? constrained.Width : constrained.Right - guide;
+            Consider(new ZoneBounds(guide, constrained.Y, width, constrained.Height));
         }
 
-        if (best is null && Math.Abs(desired.Right - guide) <= escapeDistance)
+        if (best is null && rightChanged && Math.Abs(desired.Right - guide) <= escapeDistance)
         {
-            Consider(new ZoneBounds(guide - constrained.Width, constrained.Y, constrained.Width, constrained.Height));
+            var width = isMove ? constrained.Width : guide - constrained.X;
+            var x = isMove ? guide - constrained.Width : constrained.X;
+            Consider(new ZoneBounds(x, constrained.Y, width, constrained.Height));
         }
 
         return best;
@@ -135,7 +142,7 @@ public static class ZoneAlignmentResolver
         {
             if ((!isMove && bounds.X < minimumX - Tolerance) ||
                 bounds.Right > maximumRight + Tolerance ||
-                (!isMove && bounds.Width < MinimumWidth - Tolerance) ||
+                bounds.Width < MinimumWidth - Tolerance ||
                 !ZoneCollisionResolver.IsAvailable(
                     bounds, obstacles, gap, minimumX, minimumY, maximumRight, maximumBottom))
             {
@@ -163,16 +170,21 @@ public static class ZoneAlignmentResolver
     {
         var isMove = NearlyEqual(current.Width, desired.Width) &&
                      NearlyEqual(current.Height, desired.Height);
+        var topChanged = isMove || !NearlyEqual(current.Y, desired.Y);
+        var bottomChanged = isMove || !NearlyEqual(current.Bottom, desired.Bottom);
 
         SnapCandidate? best = null;
-        if (Math.Abs(desired.Y - guide) <= escapeDistance)
+        if (topChanged && Math.Abs(desired.Y - guide) <= escapeDistance)
         {
-            Consider(new ZoneBounds(constrained.X, guide, constrained.Width, constrained.Height));
+            var height = isMove ? constrained.Height : constrained.Bottom - guide;
+            Consider(new ZoneBounds(constrained.X, guide, constrained.Width, height));
         }
 
-        if (best is null && Math.Abs(desired.Bottom - guide) <= escapeDistance)
+        if (best is null && bottomChanged && Math.Abs(desired.Bottom - guide) <= escapeDistance)
         {
-            Consider(new ZoneBounds(constrained.X, guide - constrained.Height, constrained.Width, constrained.Height));
+            var height = isMove ? constrained.Height : guide - constrained.Y;
+            var y = isMove ? guide - constrained.Height : constrained.Y;
+            Consider(new ZoneBounds(constrained.X, y, constrained.Width, height));
         }
 
         return best;
@@ -181,7 +193,7 @@ public static class ZoneAlignmentResolver
         {
             if ((!isMove && bounds.Y < minimumY - Tolerance) ||
                 bounds.Bottom > maximumBottom + Tolerance ||
-                (!isMove && bounds.Height < MinimumHeight - Tolerance) ||
+                bounds.Height < MinimumHeight - Tolerance ||
                 !ZoneCollisionResolver.IsAvailable(
                     bounds, obstacles, gap, minimumX, minimumY, maximumRight, maximumBottom))
             {

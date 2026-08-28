@@ -391,6 +391,26 @@ var tests = new List<(string Name, Action Run)>
         Assert.Near(118, result.Bounds.X, 0.1);
         Assert.Equal<double?>(null, result.VerticalGuide);
     }),
+    ("sticky guide near a stationary edge does not block the moving edge", () =>
+    {
+        // Resizing the right edge; the held guide sits exactly on the left
+        // (stationary) edge and must not swallow the active-edge snap.
+        var current = new ZoneBounds(100, 72, 200, 200);
+        var desired = new ZoneBounds(100, 72, 295, 200);
+        var obstacles = new[]
+        {
+            new ZoneBounds(400, 400, 200, 200),
+            new ZoneBounds(100, 400, 200, 200)
+        };
+        var hysteresis = new ZoneSnapHysteresis(100, null);
+        var result = ZoneAlignmentResolver.Snap(
+            current, desired, desired, obstacles, 10, 12, 0, 72, 1200, 900,
+            hysteresis, 16);
+
+        Assert.Near(400, result.Bounds.Right, 0.1);
+        Assert.Near(300, result.Bounds.Width, 0.1);
+        Assert.Near(400, result.VerticalGuide ?? -1, 0.1);
+    }),
     ("state store round-trips state", () =>
     {
         WithTempDirectory(root =>
