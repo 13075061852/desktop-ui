@@ -604,7 +604,7 @@ public partial class MainWindow : System.Windows.Window
         var minimumX = ZoneCard.HorizontalDesktopInset;
         const double minimumY = 72;
         var maximumRight = Math.Max(minimumX + 1, ActualWidth - ZoneCard.HorizontalDesktopInset);
-        var maximumBottom = Math.Max(minimumY + 1, ActualHeight);
+        var maximumBottom = Math.Max(minimumY + 1, ActualHeight - ZoneCard.HorizontalDesktopInset);
 
         var stackResize = ZoneStackResizeResolver.ReflowAdjacent(
             current,
@@ -721,7 +721,8 @@ public partial class MainWindow : System.Windows.Window
         var minimumX = ZoneCard.HorizontalDesktopInset;
         var desktopWidth = ActualWidth > 0 ? ActualWidth : SystemParameters.VirtualScreenWidth;
         var maximumRight = Math.Max(minimumX + 1, desktopWidth - ZoneCard.HorizontalDesktopInset);
-        var maximumBottom = Math.Max(73, ActualHeight > 0 ? ActualHeight : SystemParameters.VirtualScreenHeight);
+        var desktopHeight = ActualHeight > 0 ? ActualHeight : SystemParameters.VirtualScreenHeight;
+        var maximumBottom = Math.Max(73, desktopHeight - ZoneCard.HorizontalDesktopInset);
         var adjusted = false;
 
         if (_state.Zones.Count > 0)
