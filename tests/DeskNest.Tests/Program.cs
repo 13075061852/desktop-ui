@@ -368,7 +368,7 @@ var tests = new List<(string Name, Action Run)>
             new ZoneBounds(100, 72, 200, 200),
             new ZoneBounds(320, 72, 200, 200)
         };
-        var hysteresis = new ZoneSnapHysteresis(100, null);
+        var hysteresis = new ZoneSnapHysteresis { HeldVertical = 100 };
         var result = ZoneAlignmentResolver.Snap(
             current, desired, desired, obstacles, 10, 12, 0, 72, 1200, 900,
             hysteresis, 16);
@@ -377,19 +377,31 @@ var tests = new List<(string Name, Action Run)>
         // a closer alternative guide, the held guide still wins.
         Assert.Near(100, result.Bounds.X, 0.1);
         Assert.Near(100, result.VerticalGuide ?? -1, 0.1);
+        Assert.Near(100, hysteresis.HeldVertical ?? -1, 0.1);
     }),
-    ("zone alignment releases a sticky guide beyond the escape distance", () =>
+    ("zone alignment retires a released guide for the session", () =>
     {
         var current = new ZoneBounds(20, 400, 200, 200);
-        var desired = new ZoneBounds(118, 400, 200, 200);
         var obstacle = new ZoneBounds(100, 72, 200, 200);
-        var hysteresis = new ZoneSnapHysteresis(100, null);
-        var result = ZoneAlignmentResolver.Snap(
-            current, desired, desired, new[] { obstacle }, 10, 12, 0, 72, 1200, 900,
-            hysteresis, 16);
+        var hysteresis = new ZoneSnapHysteresis { HeldVertical = 100 };
 
-        Assert.Near(118, result.Bounds.X, 0.1);
-        Assert.Equal<double?>(null, result.VerticalGuide);
+        // Pointer escapes 16px: the guide is released and retired.
+        var escaped = new ZoneBounds(118, 400, 200, 200);
+        var released = ZoneAlignmentResolver.Snap(
+            current, escaped, escaped, new[] { obstacle }, 10, 12, 0, 72, 1200, 900,
+            hysteresis, 16);
+        Assert.Near(118, released.Bounds.X, 0.1);
+        Assert.Equal<double?>(null, released.VerticalGuide);
+
+        // Coming back near the same guide in the same session must not
+        // re-engage it - no tug-of-war around the snap threshold. (Width 400
+        // keeps the trailing edge away from the obstacle's other guide at 300.)
+        var returning = new ZoneBounds(94, 400, 400, 200);
+        var reengaged = ZoneAlignmentResolver.Snap(
+            current, returning, returning, new[] { obstacle }, 10, 12, 0, 72, 1200, 900,
+            hysteresis, 16);
+        Assert.Near(94, reengaged.Bounds.X, 0.1);
+        Assert.Equal<double?>(null, reengaged.VerticalGuide);
     }),
     ("sticky guide near a stationary edge does not block the moving edge", () =>
     {
@@ -402,7 +414,7 @@ var tests = new List<(string Name, Action Run)>
             new ZoneBounds(400, 400, 200, 200),
             new ZoneBounds(100, 400, 200, 200)
         };
-        var hysteresis = new ZoneSnapHysteresis(100, null);
+        var hysteresis = new ZoneSnapHysteresis { HeldVertical = 100 };
         var result = ZoneAlignmentResolver.Snap(
             current, desired, desired, obstacles, 10, 12, 0, 72, 1200, 900,
             hysteresis, 16);
