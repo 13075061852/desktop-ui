@@ -1,22 +1,18 @@
 namespace DeskNest.Core.Services;
 
 /// <summary>Sticky-snap state carried across one drag session. While a guide is
-/// held the edge stays locked to it; once the pointer escapes the release
-/// distance the guide is retired for the rest of the session so the edge
-/// follows the pointer without tug-of-war.</summary>
+/// held the edge stays locked to it until the pointer leaves the escape
+/// distance; afterwards the edge simply follows the pointer, and returning
+/// within the snap threshold re-engages the guide deliberately.</summary>
 public sealed class ZoneSnapHysteresis
 {
     public double? HeldVertical { get; set; }
     public double? HeldHorizontal { get; set; }
-    public List<double> ReleasedVertical { get; } = new();
-    public List<double> ReleasedHorizontal { get; } = new();
 
     public void Reset()
     {
         HeldVertical = null;
         HeldHorizontal = null;
-        ReleasedVertical.Clear();
-        ReleasedHorizontal.Clear();
     }
 }
 
@@ -64,9 +60,7 @@ public static class ZoneAlignmentResolver
             }
             else
             {
-                // Pointer escaped: retire this guide for the whole session so
-                // it cannot grab the edge back and start a tug-of-war.
-                hysteresis.ReleasedVertical.Add(stickyVertical);
+                // Pointer escaped the hold distance: let go and follow it.
                 hysteresis.HeldVertical = null;
             }
         }
@@ -74,8 +68,7 @@ public static class ZoneAlignmentResolver
         if (!horizontalResolved)
         {
             var horizontalCandidate = FindHorizontalCandidate(
-                current, desired, result, obstacleArray, snapDistance, IsAvailable,
-                hysteresis?.ReleasedVertical);
+                current, desired, result, obstacleArray, snapDistance, IsAvailable);
             if (horizontalCandidate is { } horizontal)
             {
                 result = horizontal.Bounds;
@@ -105,7 +98,6 @@ public static class ZoneAlignmentResolver
             }
             else
             {
-                hysteresis.ReleasedHorizontal.Add(stickyHorizontal);
                 hysteresis.HeldHorizontal = null;
             }
         }
@@ -113,8 +105,7 @@ public static class ZoneAlignmentResolver
         if (!verticalResolved)
         {
             var verticalCandidate = FindVerticalCandidate(
-                current, desired, result, obstacleArray, snapDistance, IsAvailable,
-                hysteresis?.ReleasedHorizontal);
+                current, desired, result, obstacleArray, snapDistance, IsAvailable);
             if (verticalCandidate is { } vertical)
             {
                 result = vertical.Bounds;
@@ -252,8 +243,7 @@ public static class ZoneAlignmentResolver
         ZoneBounds constrained,
         IReadOnlyList<ZoneBounds> obstacles,
         double threshold,
-        Func<ZoneBounds, bool> isAvailable,
-        IReadOnlyList<double>? releasedGuides = null)
+        Func<ZoneBounds, bool> isAvailable)
     {
         var isMove = NearlyEqual(current.Width, desired.Width) &&
                      NearlyEqual(current.Height, desired.Height);
@@ -265,11 +255,6 @@ public static class ZoneAlignmentResolver
         {
             foreach (var guide in new[] { obstacle.X, obstacle.Right })
             {
-                if (releasedGuides is not null && releasedGuides.Any(r => Math.Abs(r - guide) < Tolerance))
-                {
-                    continue;
-                }
-
                 if (leftChanged)
                 {
                     var distance = Math.Abs(desired.X - guide);
@@ -307,8 +292,7 @@ public static class ZoneAlignmentResolver
         ZoneBounds constrained,
         IReadOnlyList<ZoneBounds> obstacles,
         double threshold,
-        Func<ZoneBounds, bool> isAvailable,
-        IReadOnlyList<double>? releasedGuides = null)
+        Func<ZoneBounds, bool> isAvailable)
     {
         var isMove = NearlyEqual(current.Width, desired.Width) &&
                      NearlyEqual(current.Height, desired.Height);
@@ -320,11 +304,6 @@ public static class ZoneAlignmentResolver
         {
             foreach (var guide in new[] { obstacle.Y, obstacle.Bottom })
             {
-                if (releasedGuides is not null && releasedGuides.Any(r => Math.Abs(r - guide) < Tolerance))
-                {
-                    continue;
-                }
-
                 if (topChanged)
                 {
                     var distance = Math.Abs(desired.Y - guide);

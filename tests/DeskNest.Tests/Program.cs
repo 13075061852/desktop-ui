@@ -379,29 +379,28 @@ var tests = new List<(string Name, Action Run)>
         Assert.Near(100, result.VerticalGuide ?? -1, 0.1);
         Assert.Near(100, hysteresis.HeldVertical ?? -1, 0.1);
     }),
-    ("zone alignment retires a released guide for the session", () =>
+    ("zone alignment releases past the escape distance and re-engages on return", () =>
     {
         var current = new ZoneBounds(20, 400, 200, 200);
         var obstacle = new ZoneBounds(100, 72, 200, 200);
         var hysteresis = new ZoneSnapHysteresis { HeldVertical = 100 };
 
-        // Pointer escapes 16px: the guide is released and retired.
-        var escaped = new ZoneBounds(118, 400, 200, 200);
+        // Pointer escapes 28px: the edge lets go and follows the pointer.
+        var escaped = new ZoneBounds(130, 400, 200, 200);
         var released = ZoneAlignmentResolver.Snap(
             current, escaped, escaped, new[] { obstacle }, 10, 12, 0, 72, 1200, 900,
-            hysteresis, 16);
-        Assert.Near(118, released.Bounds.X, 0.1);
+            hysteresis, 28);
+        Assert.Near(130, released.Bounds.X, 0.1);
         Assert.Equal<double?>(null, released.VerticalGuide);
+        Assert.Equal(false, hysteresis.HeldVertical.HasValue);
 
-        // Coming back near the same guide in the same session must not
-        // re-engage it - no tug-of-war around the snap threshold. (Width 400
-        // keeps the trailing edge away from the obstacle's other guide at 300.)
-        var returning = new ZoneBounds(94, 400, 400, 200);
+        // Returning within the snap threshold deliberately re-engages.
+        var returning = new ZoneBounds(94, 400, 200, 200);
         var reengaged = ZoneAlignmentResolver.Snap(
             current, returning, returning, new[] { obstacle }, 10, 12, 0, 72, 1200, 900,
-            hysteresis, 16);
-        Assert.Near(94, reengaged.Bounds.X, 0.1);
-        Assert.Equal<double?>(null, reengaged.VerticalGuide);
+            hysteresis, 28);
+        Assert.Near(100, reengaged.Bounds.X, 0.1);
+        Assert.Near(100, reengaged.VerticalGuide ?? -1, 0.1);
     }),
     ("sticky guide near a stationary edge does not block the moving edge", () =>
     {

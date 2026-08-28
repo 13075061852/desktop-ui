@@ -646,7 +646,7 @@ public partial class MainWindow : System.Windows.Window
             maximumRight,
             maximumBottom,
             hysteresis,
-            stickyEscapeDistance: 16);
+            stickyEscapeDistance: 28);
     }
 
     private void ApplyCompressedObstacleBounds(IReadOnlyList<ZoneModel> zones, IReadOnlyList<ZoneBounds> bounds)
