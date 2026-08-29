@@ -17,7 +17,7 @@ public partial class SettingsWindow : System.Windows.Window
     private readonly AppState _state;
     private readonly DesktopWallpaperService _wallpaperService = new();
     private readonly Action<bool>? _previewAppearance;
-    private readonly Func<string?, bool>? _applyWallpaper;
+    private readonly Func<string?, Task<bool>>? _applyWallpaper;
     private readonly string _originalWallpaperPath;
     private readonly string _originalTheme;
     private readonly double _originalPanelOpacity;
@@ -33,7 +33,7 @@ public partial class SettingsWindow : System.Windows.Window
     public SettingsWindow(
         AppState state,
         Action<bool>? previewAppearance = null,
-        Func<string?, bool>? applyWallpaper = null)
+        Func<string?, Task<bool>>? applyWallpaper = null)
     {
         _state = state;
         _previewAppearance = previewAppearance;
@@ -284,14 +284,22 @@ public partial class SettingsWindow : System.Windows.Window
         return bitmap;
     }
 
-    private void OnWallpaperOptionChecked(object sender, RoutedEventArgs e)
+    private async void OnWallpaperOptionChecked(object sender, RoutedEventArgs e)
     {
         if (sender is not RadioButton { Tag: string selection })
         {
             return;
         }
 
-        if (!(_applyWallpaper?.Invoke(selection) ?? _wallpaperService.ApplySelection(selection)))
+        if (_applyWallpaper is not null)
+        {
+            if (!await _applyWallpaper(selection))
+            {
+                System.Windows.MessageBox.Show("背景图片暂时无法应用。", "栖格设置", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+        }
+        else if (!_wallpaperService.ApplySelection(selection))
         {
             System.Windows.MessageBox.Show("背景图片暂时无法应用。", "栖格设置", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
@@ -302,7 +310,7 @@ public partial class SettingsWindow : System.Windows.Window
         UpdateImportButtonState();
     }
 
-    private void OnImportWallpaperClick(object sender, RoutedEventArgs e)
+    private async void OnImportWallpaperClick(object sender, RoutedEventArgs e)
     {
         var dialog = new OpenFileDialog
         {
@@ -319,7 +327,14 @@ public partial class SettingsWindow : System.Windows.Window
         try
         {
             var importedPath = _wallpaperService.Import(dialog.FileName);
-            if (!(_applyWallpaper?.Invoke(importedPath) ?? _wallpaperService.ApplyPath(importedPath)))
+            if (_applyWallpaper is not null)
+            {
+                if (!await _applyWallpaper(importedPath))
+                {
+                    throw new IOException("Windows 无法应用所选背景图片。");
+                }
+            }
+            else if (!_wallpaperService.ApplyPath(importedPath))
             {
                 throw new IOException("Windows 无法应用所选背景图片。");
             }
@@ -411,8 +426,8 @@ public partial class SettingsWindow : System.Windows.Window
         if (_applyWallpaper is not null)
         {
             Dispatcher.BeginInvoke(
-                () => _applyWallpaper(originalPath),
-                System.Windows.Threading.DispatcherPriority.Background);
+                async () => await _applyWallpaper(originalPath),
+                System.Windows.Threading.DispatcherPriority.Loaded);
         }
         else
         {

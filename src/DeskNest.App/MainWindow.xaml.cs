@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Windows;
@@ -29,9 +29,7 @@ public partial class MainWindow : System.Windows.Window
     private readonly JsonStateStore _stateStore = new();
     private readonly RuleClassifier _classifier = new();
     private readonly ShellIconService _iconService = new();
-    private readonly Dictionary<string, BitmapImage> _wallpaperBitmapCache = new(StringComparer.OrdinalIgnoreCase);
     private int _toolbarFlightVersion;
-    private int _wallpaperPreviewVersion;
     private bool? _appliedLightTheme;
     private readonly ShellService _shellService = new();
     private readonly DesktopHostService _desktopHost = new();
@@ -42,6 +40,7 @@ public partial class MainWindow : System.Windows.Window
     private readonly DispatcherTimer _saveTimer;
     private readonly DispatcherTimer _statusTimer;
     private readonly DispatcherTimer _menuDismissTimer;
+    private readonly DispatcherTimer _windowGuardTimer;
 
     private AppState _state = AppState.CreateDefault();
     private DesktopWatcher? _desktopWatcher;
@@ -87,11 +86,18 @@ public partial class MainWindow : System.Windows.Window
             EnsureCustomDesktopWindowVisible();
             DismissTransientMenusOnOutsidePointerDown();
             DismissSelectionOnContextChange();
+            UpdateInteractionWatch();
         };
-        _menuDismissTimer.Start();
+        // 45ms 交互轮询只在有瞬态菜单或选中项时启用（见 UpdateInteractionWatch）；
+        // 空闲时常驻的只有低频窗口守卫，避免无谓唤醒。
+        _windowGuardTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+        _windowGuardTimer.Tick += (_, _) => EnsureCustomDesktopWindowVisible();
+        _windowGuardTimer.Start();
 
         SourceInitialized += OnSourceInitialized;
         Loaded += OnLoaded;
+        IsVisibleChanged += (_, args) => DebugUiLog($"window IsVisible -> {args.NewValue}");
+        StateChanged += (_, _) => DebugUiLog($"window state -> {WindowState}");
         Deactivated += (_, _) => CloseTransientMenus();
         PreviewMouseLeftButtonDown += OnWindowPreviewMouseLeftButtonDown;
         Closing += OnClosing;
@@ -226,12 +232,34 @@ public partial class MainWindow : System.Windows.Window
         }
     }
 
+    /// <summary>瞬态菜单或选中项存在时才启用 45ms 交互轮询；空闲时完全停表。</summary>
+    private void UpdateInteractionWatch()
+    {
+        var shouldWatch = _selectedItemId is not null ||
+                          DesktopCanvas.Children.OfType<ZoneCard>().Any(card => card.HasOpenTransientMenu);
+        if (shouldWatch)
+        {
+            if (!_menuDismissTimer.IsEnabled)
+            {
+                _menuDismissTimer.Start();
+                DebugUiLog("interaction watch on");
+            }
+        }
+        else if (_menuDismissTimer.IsEnabled)
+        {
+            _menuDismissTimer.Stop();
+            DebugUiLog("interaction watch off");
+        }
+    }
+
     private void CloseTransientMenus()
     {
         foreach (var card in DesktopCanvas.Children.OfType<ZoneCard>())
         {
             card.CloseTransientMenus();
         }
+
+        UpdateInteractionWatch();
     }
 
     private void SelectItem(ZoneCard selectedCard, ZoneModel zone, DesktopItem item)
@@ -243,6 +271,8 @@ public partial class MainWindow : System.Windows.Window
         {
             card.SetSelectedItem(card == selectedCard ? item.Id : null);
         }
+
+        UpdateInteractionWatch();
 
         if (!_deleteHotKeyRegistered && _mainWindowHandle != 0)
         {
@@ -263,6 +293,8 @@ public partial class MainWindow : System.Windows.Window
         {
             card.SetSelectedItem(null);
         }
+
+        UpdateInteractionWatch();
 
         if (_deleteHotKeyRegistered)
         {
@@ -514,7 +546,7 @@ public partial class MainWindow : System.Windows.Window
         var desktopMappingsAdded = AddUnmappedDesktopItems();
         if (!string.IsNullOrWhiteSpace(_state.WallpaperSelection))
         {
-            _wallpaperService.ApplySelection(_state.WallpaperSelection);
+            await _wallpaperService.ApplySelectionModernAsync(_state.WallpaperSelection);
         }
 
         var layoutAdjusted = NormalizeZoneLayout();
@@ -562,7 +594,6 @@ public partial class MainWindow : System.Windows.Window
             () => Dispatcher.Invoke(ToggleDesktopMode),
             () => Dispatcher.Invoke(ExitApplication));
         _ = TrimWorkingSetAfterStartupAsync();
-        _ = PreloadWallpaperBitmapsAsync();
 
         if (isFirstRun)
         {
@@ -636,6 +667,7 @@ public partial class MainWindow : System.Windows.Window
             card.ItemDragCompleted += (_, args) => HandleItemDragCompleted(args);
             card.ItemSelected += (_, args) => SelectItem(card, zone, args.Item);
             card.SelectionClearRequested += (_, _) => ClearItemSelection();
+            card.TransientMenuStateChanged += (_, _) => UpdateInteractionWatch();
             card.ItemOpenRequested += (_, args) => OpenItem(args.Item);
             card.ItemRenameRequested += (_, args) => RenameItem(zone, args.Item);
             card.ItemRevealRequested += (_, args) => RevealItem(args.Item);
@@ -1960,6 +1992,34 @@ public partial class MainWindow : System.Windows.Window
 
     private void OnToggleDesktopModeClick(object sender, RoutedEventArgs e) => ToggleDesktopMode();
 
+    private static bool _uiLogBroken;
+
+    private static void DebugUiLog(string message)
+    {
+        if (_uiLogBroken)
+        {
+            return;
+        }
+
+        try
+        {
+            var dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DeskNest");
+            Directory.CreateDirectory(dir);
+            var file = Path.Combine(dir, "ui-debug.log");
+            if (File.Exists(file) && new FileInfo(file).Length > 512 * 1024)
+            {
+                File.Delete(file);
+            }
+
+            File.AppendAllText(file, $"[{DateTime.Now:HH:mm:ss.fff}] {message}{Environment.NewLine}");
+        }
+        catch (Exception)
+        {
+            _uiLogBroken = true;
+        }
+    }
+
     private void ToggleDesktopMode()
     {
         var enterCustomMode = !_state.DesktopIconsHidden;
@@ -1989,12 +2049,13 @@ public partial class MainWindow : System.Windows.Window
 
         UpdateToolbarState();
         RequestSave();
+        DebugUiLog($"toggle mode enter={enterCustomMode} canvas={DesktopCanvas.Visibility} nativeVisible={_mainWindowHandle != 0 && NativeMethods.IsWindowVisible(_mainWindowHandle)}");
         ShowStatus(enterCustomMode ? "已切换到自定义模式" : "已切换到系统模式");
     }
 
     private void OnSettingsClick(object sender, RoutedEventArgs e)
     {
-        var settings = new SettingsWindow(_state, PreviewAppearance, ApplyWallpaperImmediately) { Owner = this };
+        var settings = new SettingsWindow(_state, PreviewAppearance, ApplyWallpaperImmediatelyAsync) { Owner = this };
         if (settings.ShowDialog() != true)
         {
             return;
@@ -2439,7 +2500,9 @@ public partial class MainWindow : System.Windows.Window
         ToolbarBorder.IsHitTestVisible = true;
     }
 
-    private bool ApplyWallpaperImmediately(string? selection)
+    /// <summary>纯系统级壁纸切换：走 Windows 设置同款的 WinRT 个性化接口，
+    /// DWM 自带过渡动画；WinRT 不可用时回退到 SPI（无广播）。</summary>
+    private async Task<bool> ApplyWallpaperImmediatelyAsync(string? selection)
     {
         var targetPath = _wallpaperService.ResolveSelection(selection);
         if (targetPath is null)
@@ -2447,114 +2510,23 @@ public partial class MainWindow : System.Windows.Window
             return false;
         }
 
-        BitmapImage targetBitmap;
-        try
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var ok = await _wallpaperService.ApplyPathModernAsync(targetPath);
+        var modern = ok;
+        if (!ok)
         {
-            if (!_wallpaperBitmapCache.TryGetValue(targetPath, out targetBitmap!))
-            {
-                targetBitmap = LoadWallpaperBitmap(targetPath);
-                _wallpaperBitmapCache[targetPath] = targetBitmap;
-            }
+            ok = await Task.Run(() => _wallpaperService.ApplyPath(targetPath));
         }
-        catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+
+        stopwatch.Stop();
+        DebugUiLog($"wallpaper apply took {stopwatch.ElapsedMilliseconds}ms modern={modern} ok={ok} path={Path.GetFileName(targetPath)}");
+        if (!ok)
         {
+            ShowStatus("背景图片暂时无法应用");
             return false;
         }
 
-        // Explorer can take a few frames to repaint after SPI_SETDESKWALLPAPER. Put the new
-        // frame on our desktop layer first, then let the native wallpaper update run at a lower
-        // dispatcher priority. This makes the click appear immediate without blocking WPF's UI.
-        var previewVersion = ++_wallpaperPreviewVersion;
-        WallpaperPreviewImage.BeginAnimation(OpacityProperty, null);
-        WallpaperPreviewImage.Source = targetBitmap;
-        WallpaperPreviewImage.Opacity = 1;
-        WallpaperPreviewImage.Visibility = Visibility.Visible;
-
-        Dispatcher.BeginInvoke(
-            DispatcherPriority.Background,
-            new Action(() => _ = CommitWallpaperPreviewAsync(targetPath, previewVersion)));
         return true;
-    }
-
-    private async Task CommitWallpaperPreviewAsync(string targetPath, int previewVersion)
-    {
-        if (previewVersion != _wallpaperPreviewVersion)
-        {
-            return;
-        }
-
-        if (!_wallpaperService.ApplyPath(targetPath))
-        {
-            ClearWallpaperPreview(previewVersion);
-            ShowStatus("背景图片暂时无法应用");
-            return;
-        }
-
-        // Keep the preview until Windows reports the same path. The bounded wait prevents a
-        // slow Explorer refresh from exposing the old wallpaper, while still releasing the
-        // extra compositing layer when the native handoff is complete.
-        for (var attempt = 0; attempt < 16; attempt++)
-        {
-            await Task.Delay(75);
-            if (previewVersion != _wallpaperPreviewVersion ||
-                string.Equals(_wallpaperService.GetCurrentWallpaperPath(), targetPath, StringComparison.OrdinalIgnoreCase))
-            {
-                break;
-            }
-        }
-
-        ClearWallpaperPreview(previewVersion);
-    }
-
-    private void ClearWallpaperPreview(int previewVersion)
-    {
-        if (previewVersion != _wallpaperPreviewVersion)
-        {
-            return;
-        }
-
-        WallpaperPreviewImage.BeginAnimation(OpacityProperty, null);
-        WallpaperPreviewImage.Source = null;
-        WallpaperPreviewImage.Opacity = 0;
-        WallpaperPreviewImage.Visibility = Visibility.Collapsed;
-    }
-
-    private async Task PreloadWallpaperBitmapsAsync()
-    {
-        foreach (var option in _wallpaperService.GetBuiltInOptions())
-        {
-            var path = _wallpaperService.ResolveSelection(option.Key);
-            if (path is null || _wallpaperBitmapCache.ContainsKey(path))
-            {
-                continue;
-            }
-
-            try
-            {
-                var bitmap = await Task.Run(() => LoadWallpaperBitmap(path));
-                if (!_wallpaperBitmapCache.ContainsKey(path))
-                {
-                    _wallpaperBitmapCache[path] = bitmap;
-                }
-            }
-            catch (Exception exception) when (
-                exception is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
-            {
-                // A missing optional built-in wallpaper should not affect application startup.
-            }
-        }
-    }
-
-    private static BitmapImage LoadWallpaperBitmap(string path)
-    {
-        var bitmap = new BitmapImage();
-        bitmap.BeginInit();
-        bitmap.CacheOption = BitmapCacheOption.OnLoad;
-        bitmap.UriSource = new Uri(Path.GetFullPath(path), UriKind.Absolute);
-        bitmap.EndInit();
-        bitmap.Freeze();
-        return bitmap;
     }
 
     private void PreviewAppearance(bool animateToolbar)
@@ -2574,6 +2546,8 @@ public partial class MainWindow : System.Windows.Window
         {
             BeginThemeTransition();
         }
+
+        DebugUiLog($"preview appearance toolbar={animateToolbar} themeChanged={themeChanged} light={lightTheme}");
 
         foreach (var card in DesktopCanvas.Children.OfType<ZoneCard>())
         {
@@ -2658,6 +2632,7 @@ public partial class MainWindow : System.Windows.Window
         ThemeTransitionImage.Source = snapshot;
         ThemeTransitionImage.Opacity = 1;
         ThemeTransitionImage.Visibility = Visibility.Visible;
+        DebugUiLog($"theme snapshot {(int)ActualWidth}x{(int)ActualHeight}");
     }
 
     private void PlayThemeTransition()
@@ -2667,6 +2642,7 @@ public partial class MainWindow : System.Windows.Window
             return;
         }
 
+        DebugUiLog("theme fade start");
         var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(260))
         {
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
@@ -2678,6 +2654,7 @@ public partial class MainWindow : System.Windows.Window
             ThemeTransitionImage.Opacity = 0;
             ThemeTransitionImage.Source = null;
             ThemeTransitionImage.Visibility = Visibility.Collapsed;
+            DebugUiLog("theme fade done");
         };
         ThemeTransitionImage.BeginAnimation(OpacityProperty, fade);
     }
@@ -2759,6 +2736,7 @@ public partial class MainWindow : System.Windows.Window
             return;
         }
 
+        DebugUiLog("ensure window: hidden detected, restoring");
         try
         {
             if (WindowState == WindowState.Minimized)

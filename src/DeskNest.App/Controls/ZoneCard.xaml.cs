@@ -170,6 +170,9 @@ public partial class ZoneCard : UserControl
     internal Action? DragPreviewEnded { get; set; }
     internal bool HasOpenTransientMenu => _openContextMenu?.IsOpen == true;
 
+    /// <summary>瞬态菜单打开或关闭后触发，供宿主按需启用交互轮询。</summary>
+    internal event EventHandler? TransientMenuStateChanged;
+
     internal event EventHandler? ModelChanged;
 
     /// <summary>Raised after the collapse toggle flips and before the expand
@@ -697,6 +700,7 @@ public partial class ZoneCard : UserControl
             }
 
             _openContextMenu = menu;
+            TransientMenuStateChanged?.Invoke(this, EventArgs.Empty);
         };
         menu.Closed += (_, _) =>
         {
@@ -704,6 +708,8 @@ public partial class ZoneCard : UserControl
             {
                 _openContextMenu = null;
             }
+
+            TransientMenuStateChanged?.Invoke(this, EventArgs.Empty);
         };
         return menu;
     }

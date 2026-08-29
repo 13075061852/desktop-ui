@@ -64,6 +64,33 @@ internal sealed class DesktopWallpaperService
         return path is not null && ApplyPath(path);
     }
 
+    /// <summary>与 Windows 设置同款的 WinRT 个性化接口：DWM 自带交叉淡入过渡，
+    /// 不会触发任务栏重载。失败时调用方回退到 SPI。</summary>
+    public async Task<bool> ApplyPathModernAsync(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(path);
+            return await Windows.System.UserProfile.UserProfilePersonalizationSettings.Current
+                .TrySetWallpaperImageAsync(file);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    public async Task<bool> ApplySelectionModernAsync(string? selection)
+    {
+        var path = ResolveSelection(selection);
+        return path is not null && await ApplyPathModernAsync(path);
+    }
+
     public bool RestorePath(string? path)
     {
         if (string.IsNullOrWhiteSpace(path))
@@ -72,7 +99,7 @@ internal sealed class DesktopWallpaperService
                 NativeMethods.SpiSetDesktopWallpaper,
                 0,
                 string.Empty,
-                NativeMethods.SpifUpdateIniFile | NativeMethods.SpifSendChange);
+                NativeMethods.SpifUpdateIniFile);
         }
 
         return ApplyPath(path);
@@ -100,7 +127,7 @@ internal sealed class DesktopWallpaperService
             NativeMethods.SpiSetDesktopWallpaper,
             0,
             Path.GetFullPath(path),
-            NativeMethods.SpifUpdateIniFile | NativeMethods.SpifSendChange);
+            NativeMethods.SpifUpdateIniFile);
     }
 
     public string Import(string sourcePath)

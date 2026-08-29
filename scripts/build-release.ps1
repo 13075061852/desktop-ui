@@ -18,12 +18,19 @@ try {
     & $dotnet run --project '.\tests\DeskNest.Tests\DeskNest.Tests.csproj' -c Release
     if ($LASTEXITCODE -ne 0) { throw 'Core tests failed.' }
 
-    if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
+    if (Test-Path $dist) {
+        Remove-Item $dist -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path $dist) {
+            # 目录本身被占用（常见于资源管理器开着 dist 文件夹）：
+            # 清空内容后复用目录，dotnet publish 可以直接写入
+            Get-ChildItem $dist -Force | Remove-Item -Recurse -Force -ErrorAction Stop
+        }
+    }
     & $dotnet publish '.\src\DeskNest.App\DeskNest.App.csproj' `
         -c Release `
         -r win-x64 `
         --self-contained false `
-        -p:PublishReadyToRun=false `
+        -p:PublishReadyToRun=true `
         -p:DebugType=None `
         -p:DebugSymbols=false `
         -o $dist
@@ -36,6 +43,9 @@ try {
     $zip = Join-Path $root 'dist\DeskNest-MVP-win-x64.zip'
     if (Test-Path $zip) { Remove-Item $zip -Force }
     Compress-Archive -Path (Join-Path $dist '*') -DestinationPath $zip -CompressionLevel Optimal
+
+    # 生成双击安装的 Setup 安装包（未安装 Inno Setup 时自动跳过）
+    & (Join-Path $PSScriptRoot 'make-setup.ps1')
 
     $size = (Get-ChildItem $dist -File -Recurse | Measure-Object Length -Sum).Sum
     Write-Host "`nDeskNest release is ready: $dist" -ForegroundColor Green
