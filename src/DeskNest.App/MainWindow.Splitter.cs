@@ -27,8 +27,6 @@ namespace DeskNest.App;
 // ---------------------------------------------------------------------------
 public partial class MainWindow
 {
-    private const double SplitterMinimumWidth = 150;
-    private const double SplitterMinimumHeight = 150;
     private const double SplitterMaxGap = 18;
     private const double SplitterMinimumOverlap = 60;
 
@@ -46,34 +44,34 @@ public partial class MainWindow
         public bool DragActive;
     }
 
-    /// <summary>A bystander zone whose edge sits on the splitter line; it rides
-    /// along with the line so the whole column/row stays aligned.</summary>
-    private sealed class SplitterRider
-    {
-        public required ZoneModel Zone;
-
-        /// <summary>Line position at the moment this rider attached; only the
-        /// movement accumulated afterwards moves the rider.</summary>
-        public double AppliedLineMid;
-    }
-
     private sealed class SplitterDragState
     {
         public required ZoneSplitterRail Rail;
-        public required ZoneModel First;
-        public required ZoneModel Second;
         public required bool IsHorizontalLine;
         public required double Gap;
-        public required ZoneBounds FirstStart;
-        public required ZoneBounds SecondStart;
+
+        /// <summary>Every flush zone on the first side of the line (above a
+        /// horizontal rail / left of a vertical rail). Collinear zones form
+        /// one group: they grow with the line and shrink to their minimum
+        /// first, so one line drags them all in lockstep.</summary>
+        public required List<ZoneModel> Firsts;
+
+        /// <summary>Every flush zone on the second side of the line; they
+        /// shrink from the line, translate once at minimum, and grow when the
+        /// line moves back.</summary>
+        public required List<ZoneModel> Seconds;
+
+        public List<ZoneBounds> FirstStarts { get; } = new();
+
+        public List<ZoneBounds> SecondStarts { get; } = new();
 
         /// <summary>Total pointer travel since drag start. DragDelta reports per-event
         /// deltas, so they must be accumulated to get an absolute drag position.</summary>
         public double AccumulatedOffset;
 
-        /// <summary>Bystander zones riding the line; collected at drag start and
-        /// whenever the moving line sweeps over another zone's edge.</summary>
-        public List<SplitterRider> Riders { get; } = new();
+        /// <summary>Every zone's bounds at drag start; at drag completion the
+        /// zones that moved capture the new arrangement as their rest bounds.</summary>
+        public Dictionary<Guid, ZoneBounds> StartSnapshot { get; } = new();
     }
 
     private const double RiderAttachTolerance = 3;
@@ -228,8 +226,6 @@ public partial class MainWindow
         }
         else
         {
-            var bandLeft = Math.Max(boundsA.X, boundsB.X);
-            var bandRight = Math.Min(boundsA.Right, boundsB.Right);
             var midGap = boundsB.X - gap / 2;
             var bandThickness = Math.Max(10, gap + 8);
             var railTop = Math.Min(boundsA.Y, boundsB.Y) + 6;
@@ -329,132 +325,92 @@ public partial class MainWindow
 
         rail.DragActive = true;
         AnimateSplitterLine(rail, 0.9);
+        var firstStart = GetVisualBounds(first);
+        var secondStart = GetVisualBounds(second);
         var gap = rail.IsHorizontalLine
-            ? GetVisualBounds(second).Y - GetVisualBounds(first).Bottom
-            : GetVisualBounds(second).X - GetVisualBounds(first).Right;
+            ? secondStart.Y - firstStart.Bottom
+            : secondStart.X - firstStart.Right;
         _splitterDrag = new SplitterDragState
         {
             Rail = rail,
-            First = first,
-            Second = second,
             IsHorizontalLine = rail.IsHorizontalLine,
             Gap = Math.Max(2, gap),
-            FirstStart = GetVisualBounds(first),
-            SecondStart = GetVisualBounds(second)
+            Firsts = [first],
+            Seconds = [second]
         };
+        _splitterDrag.FirstStarts.Add(firstStart);
+        _splitterDrag.SecondStarts.Add(secondStart);
+        foreach (var zone in _state.Zones)
+        {
+            _splitterDrag.StartSnapshot[zone.Id] = GetVisualBounds(zone);
+        }
+
         var lineMidStart = rail.IsHorizontalLine
-            ? GetVisualBounds(second).Y - _splitterDrag.Gap / 2
-            : GetVisualBounds(second).X - _splitterDrag.Gap / 2;
-        CollectRiders(_splitterDrag, lineMidStart);
+            ? secondStart.Y - _splitterDrag.Gap / 2
+            : secondStart.X - _splitterDrag.Gap / 2;
+        CollectFlushGroups(_splitterDrag, lineMidStart);
     }
 
-    private void CollectRiders(SplitterDragState drag, double lineMidStart)
+    /// <summary>Grows the drag groups to a fixed point: every zone whose edge
+    /// sits on the line AND whose band overlaps the already-collected members
+    /// joins. Only those zones the moving line would actually collide with —
+    /// zones in another row/column that merely align with the line coordinate
+    /// stay put.</summary>
+    private void CollectFlushGroups(SplitterDragState drag, double lineMidStart)
     {
-        var secondEdge = lineMidStart + drag.Gap / 2;
         var firstEdge = lineMidStart - drag.Gap / 2;
-        foreach (var zone in _state.Zones)
+        var secondEdge = lineMidStart + drag.Gap / 2;
+        var isHorizontal = drag.IsHorizontalLine;
+        var bandMin = double.MaxValue;
+        var bandMax = double.MinValue;
+        foreach (var start in drag.FirstStarts.Concat(drag.SecondStarts))
         {
-            TryAttachRider(drag, zone, secondEdge, firstEdge, lineMidStart);
+            bandMin = Math.Min(bandMin, isHorizontal ? start.X : start.Y);
+            bandMax = Math.Max(bandMax, isHorizontal ? start.Right : start.Bottom);
+        }
+
+        var changed = true;
+        while (changed)
+        {
+            changed = false;
+            foreach (var zone in _state.Zones)
+            {
+                if (zone.IsCollapsed || drag.Firsts.Contains(zone) || drag.Seconds.Contains(zone))
+                {
+                    continue;
+                }
+
+                var bounds = GetVisualBounds(zone);
+                var memberMin = isHorizontal ? bounds.X : bounds.Y;
+                var memberMax = isHorizontal ? bounds.Right : bounds.Bottom;
+                if (memberMin >= bandMax - 0.01 || memberMax <= bandMin + 0.01)
+                {
+                    continue;
+                }
+
+                var firstEdgeCoord = isHorizontal ? bounds.Bottom : bounds.Right;
+                var secondEdgeCoord = isHorizontal ? bounds.Y : bounds.X;
+                if (Math.Abs(firstEdgeCoord - firstEdge) <= RiderAttachTolerance)
+                {
+                    drag.Firsts.Add(zone);
+                    drag.FirstStarts.Add(bounds);
+                }
+                else if (Math.Abs(secondEdgeCoord - secondEdge) <= RiderAttachTolerance)
+                {
+                    drag.Seconds.Add(zone);
+                    drag.SecondStarts.Add(bounds);
+                }
+                else
+                {
+                    continue;
+                }
+
+                bandMin = Math.Min(bandMin, memberMin);
+                bandMax = Math.Max(bandMax, memberMax);
+                changed = true;
+            }
         }
     }
-
-    private void TryAttachRider(
-        SplitterDragState drag,
-        ZoneModel zone,
-        double secondEdge,
-        double firstEdge,
-        double currentLineMid)
-    {
-        if (zone.Id == drag.First.Id || zone.Id == drag.Second.Id || zone.IsCollapsed)
-        {
-            return;
-        }
-
-        if (drag.Riders.Any(rider => rider.Zone.Id == zone.Id))
-        {
-            return;
-        }
-
-        var bounds = GetVisualBounds(zone);
-        var onSecondSide = Math.Abs(
-            (drag.IsHorizontalLine ? bounds.Y : bounds.X) - secondEdge) <= RiderAttachTolerance;
-        var onFirstSide = !onSecondSide && Math.Abs(
-            (drag.IsHorizontalLine ? bounds.Bottom : bounds.Right) - firstEdge) <= RiderAttachTolerance;
-        if (onSecondSide || onFirstSide)
-        {
-            drag.Riders.Add(new SplitterRider
-            {
-                Zone = zone,
-                AppliedLineMid = currentLineMid
-            });
-        }
-    }
-
-    private void MoveRidersWithLine(SplitterDragState drag, double lineMid, double shift)
-    {
-        // The line is a full-height/width grid line: any zone whose edge sits
-        // on it - from drag start or swept over mid-drag - rides along with
-        // the line, keeping its relative position. Riders follow the LINE, not
-        // just the translation: during the squeeze phase the line moves while
-        // the pair's outer edges stay anchored, and a rider left behind would
-        // be covered by the growing neighbour (the reported overlap).
-        var secondEdge = lineMid + drag.Gap / 2;
-        var firstEdge = lineMid - drag.Gap / 2;
-        foreach (var zone in _state.Zones)
-        {
-            TryAttachRider(drag, zone, secondEdge, firstEdge, lineMid);
-        }
-
-        foreach (var rider in drag.Riders)
-        {
-            var delta = lineMid - rider.AppliedLineMid;
-            if (Math.Abs(delta) < 0.01)
-            {
-                continue;
-            }
-
-            var bounds = GetVisualBounds(rider.Zone);
-            ZoneBounds candidate;
-            if (drag.IsHorizontalLine)
-            {
-                var y = Math.Clamp(
-                    bounds.Y + delta,
-                    72,
-                    Math.Max(73, MaximumZoneBottom - bounds.Height));
-                candidate = new ZoneBounds(bounds.X, y, bounds.Width, bounds.Height);
-            }
-            else
-            {
-                var x = Math.Clamp(
-                    bounds.X + delta,
-                    ZoneCard.HorizontalDesktopInset,
-                    Math.Max(ZoneCard.HorizontalDesktopInset + 1, MaximumZoneRight - bounds.Width));
-                candidate = new ZoneBounds(x, bounds.Y, bounds.Width, bounds.Height);
-            }
-
-            // If the ride ran out of room (everything piled at a boundary),
-            // stay put and keep following once space frees up again.
-            var blocked = _state.Zones.Any(other =>
-                other.Id != rider.Zone.Id &&
-                !other.IsCollapsed &&
-                Intersects(candidate, GetVisualBounds(other)));
-            if (blocked)
-            {
-                continue;
-            }
-
-            rider.AppliedLineMid = lineMid;
-            ApplyZoneVisualBounds(rider.Zone, candidate);
-        }
-    }
-
-    private static bool Intersects(ZoneBounds first, ZoneBounds second) =>
-        first.X < second.Right - ToleranceValue &&
-        first.Right > second.X + ToleranceValue &&
-        first.Y < second.Bottom - ToleranceValue &&
-        first.Bottom > second.Y + ToleranceValue;
-
-    private const double ToleranceValue = 0.01;
 
     private void OnSplitterDragDelta(object sender, DragDeltaEventArgs e)
     {
@@ -492,7 +448,20 @@ public partial class MainWindow
         {
             drag.Rail.DragActive = false;
             AnimateSplitterLine(drag.Rail, 0);
+            // A splitter drag is an explicit arrangement: every zone the user
+            // moved (pair, riders, pushed bystanders) adopts the new bounds
+            // as its home; then let zones pushed in earlier sessions relax.
+            foreach (var zone in _state.Zones)
+            {
+                if (drag.StartSnapshot.TryGetValue(zone.Id, out var start) &&
+                    !BoundsApproximatelyEqual(start, GetVisualBounds(zone)))
+                {
+                    zone.CaptureRestBounds();
+                }
+            }
+
             _splitterDrag = null;
+            RelaxNeighboursTowardRest();
         }
 
         RequestSave();
@@ -511,109 +480,32 @@ public partial class MainWindow
         - ZoneCard.HorizontalDesktopInset);
 
     /// <summary>
-    /// Moves a side-by-side pair along the horizontal axis. <paramref name="offset"/>
+    /// Moves a side-by-side group along the horizontal axis. <paramref name="offset"/>
     /// is the absolute pointer travel since the drag started (positive = right).
-    /// Phase 1 redistributes space with the pair's outer edges anchored; once
-    /// the squeezed zone reaches its minimum width, phase 2 translates the
-    /// whole pair until the moving outer edge reaches the window boundary.
+    /// All flush zones on both sides of the line form one group; the group
+    /// bounds, pushed bystanders and layout validity are resolved by
+    /// <see cref="ZoneSplitterResolver.TryGroupLayout"/> and applied atomically.
     /// </summary>
     private void MoveSideBySidePair(SplitterDragState drag, double offset)
     {
-        var first = drag.FirstStart;
-        var second = drag.SecondStart;
-
-        var midGapStart = second.X - drag.Gap / 2;
+        var midGapStart = drag.SecondStarts[0].X - drag.Gap / 2;
         var desiredMid = midGapStart + offset;
-        var lineMid = ResolveRailPosition(drag, desiredMid, movingForward: offset >= 0);
+        var lineMid = ResolveGroupRailPosition(drag, desiredMid, movingForward: offset >= 0);
 
-        // The rail is the inner boundary: the zone on the drag side keeps its outer
-        // edge anchored and grows with the rail; the other zone shrinks to its
-        // minimum and then translates (pushed along), so a bystander like
-        // 文本文档 never shifts as a whole when its right rail is dragged.
-        ZoneBounds newFirst;
-        ZoneBounds newSecond;
-        if (offset >= 0)
-        {
-            var secondLeft = lineMid + drag.Gap / 2;
-            var secondRight = Math.Max(second.Right, secondLeft + SplitterMinimumWidth);
-            newFirst = new ZoneBounds(
-                first.X,
-                first.Y,
-                Math.Max(SplitterMinimumWidth, lineMid - drag.Gap / 2 - first.X),
-                first.Height);
-            newSecond = new ZoneBounds(secondLeft, second.Y, secondRight - secondLeft, second.Height);
-        }
-        else
-        {
-            var firstRight = lineMid - drag.Gap / 2;
-            var firstLeft = Math.Min(first.X, firstRight - SplitterMinimumWidth);
-            newFirst = new ZoneBounds(firstLeft, first.Y, firstRight - firstLeft, first.Height);
-            newSecond = new ZoneBounds(
-                second.X,
-                second.Y,
-                Math.Max(SplitterMinimumWidth, lineMid + drag.Gap / 2 - second.X),
-                second.Height);
-        }
-
-        if (BoundsApproximatelyEqual(newFirst, GetVisualBounds(drag.First)) &&
-            BoundsApproximatelyEqual(newSecond, GetVisualBounds(drag.Second)))
-        {
-            return;
-        }
-
-        ApplyZoneVisualBounds(drag.First, newFirst);
-        ApplyZoneVisualBounds(drag.Second, newSecond);
-        TryLayoutAndPush(drag, lineMid, movingForward: offset >= 0, apply: true);
-        MoveRidersWithLine(drag, lineMid, 0);
+        TryGroupLayoutAndPush(drag, lineMid, movingForward: offset >= 0, apply: true);
     }
 
-    /// <summary>Redistributes the vertical space of a stacked pair; the top zone
-    /// keeps its top edge anchored and grows with the rail, the bottom zone
-    /// shrinks to its minimum and then translates (pushed along).</summary>
+    /// <summary>Redistributes the vertical space of a stacked group: all
+    /// flush zones on both sides of the line move in lockstep; the group
+    /// bounds, pushed bystanders and layout validity are resolved by
+    /// <see cref="ZoneSplitterResolver.TryGroupLayout"/> and applied atomically.</summary>
     private void MoveStackedPair(SplitterDragState drag, double offset)
     {
-        var first = drag.FirstStart;
-        var second = drag.SecondStart;
-
-        var midGapStart = second.Y - drag.Gap / 2;
+        var midGapStart = drag.SecondStarts[0].Y - drag.Gap / 2;
         var desiredMid = midGapStart + offset;
-        var lineMid = ResolveRailPosition(drag, desiredMid, movingForward: offset >= 0);
+        var lineMid = ResolveGroupRailPosition(drag, desiredMid, movingForward: offset >= 0);
 
-        ZoneBounds newFirst;
-        ZoneBounds newSecond;
-        if (offset >= 0)
-        {
-            var secondTop = lineMid + drag.Gap / 2;
-            var secondBottom = Math.Max(second.Bottom, secondTop + SplitterMinimumHeight);
-            newFirst = new ZoneBounds(
-                first.X,
-                first.Y,
-                first.Width,
-                Math.Max(SplitterMinimumHeight, lineMid - drag.Gap / 2 - first.Y));
-            newSecond = new ZoneBounds(second.X, secondTop, second.Width, secondBottom - secondTop);
-        }
-        else
-        {
-            var firstBottom = lineMid - drag.Gap / 2;
-            var firstTop = Math.Min(first.Y, firstBottom - SplitterMinimumHeight);
-            newFirst = new ZoneBounds(first.X, firstTop, first.Width, firstBottom - firstTop);
-            newSecond = new ZoneBounds(
-                second.X,
-                second.Y,
-                second.Width,
-                Math.Max(SplitterMinimumHeight, lineMid + drag.Gap / 2 - second.Y));
-        }
-
-        if (BoundsApproximatelyEqual(newFirst, GetVisualBounds(drag.First)) &&
-            BoundsApproximatelyEqual(newSecond, GetVisualBounds(drag.Second)))
-        {
-            return;
-        }
-
-        ApplyZoneVisualBounds(drag.First, newFirst);
-        ApplyZoneVisualBounds(drag.Second, newSecond);
-        TryLayoutAndPush(drag, lineMid, movingForward: offset >= 0, apply: true);
-        MoveRidersWithLine(drag, lineMid, 0);
+        TryGroupLayoutAndPush(drag, lineMid, movingForward: offset >= 0, apply: true);
     }
 
     /// <summary>
@@ -621,269 +513,82 @@ public partial class MainWindow
     /// the pointer, but the layout must stay valid: the pair never covers a
     /// bystander and every zone keeps the 12px minimum gap (bystanders are
     /// pushed along in the drag direction). Binary search converges on the
-    /// largest (or smallest) valid line position.
+    /// largest (or smallest) valid line position. The pure geometry lives in
+    /// <see cref="ZoneSplitterResolver"/> so it stays unit-testable.
     /// </summary>
-    private double ResolveRailPosition(SplitterDragState drag, double desiredMid, bool movingForward)
+    private double ResolveGroupRailPosition(SplitterDragState drag, double desiredMid, bool movingForward)
     {
-        var first = drag.FirstStart;
-        var second = drag.SecondStart;
-        var midGapStart = second.X - drag.Gap / 2;
-
-        if (movingForward)
-        {
-            if (desiredMid <= midGapStart + 0.01)
-            {
-                return midGapStart;
-            }
-
-            var high = Math.Min(desiredMid, MaximumZoneRight - SplitterMinimumWidth - drag.Gap / 2);
-            if (high <= midGapStart + 0.01)
-            {
-                return midGapStart;
-            }
-
-            var low = midGapStart;
-            if (TryLayoutAndPush(drag, high, true, apply: false))
-            {
-                return high;
-            }
-
-            for (var iteration = 0; iteration < 32; iteration++)
-            {
-                var mid = (low + high) / 2;
-                if (TryLayoutAndPush(drag, mid, true, apply: false))
-                {
-                    low = mid;
-                }
-                else
-                {
-                    high = mid;
-                }
-            }
-
-            return low;
-        }
-
-        if (desiredMid >= midGapStart - 0.01)
-        {
-            return midGapStart;
-        }
-
-        var backwardLow = Math.Max(
+        return ZoneSplitterResolver.ResolveGroupRailPosition(
+            drag.FirstStarts,
+            drag.SecondStarts,
+            CollectBystanderBounds(drag),
+            drag.Gap,
+            drag.IsHorizontalLine,
             desiredMid,
-            ZoneCard.HorizontalDesktopInset + SplitterMinimumWidth + drag.Gap / 2);
-        if (backwardLow >= midGapStart - 0.01)
-        {
-            return midGapStart;
-        }
+            movingForward,
+            ZoneCard.HorizontalDesktopInset,
+            72,
+            MaximumZoneRight,
+            MaximumZoneBottom);
+    }
 
-        var backwardHigh = midGapStart;
-        if (TryLayoutAndPush(drag, backwardLow, false, apply: false))
-        {
-            return backwardLow;
-        }
-
-        for (var iteration = 0; iteration < 32; iteration++)
-        {
-            var mid = (backwardLow + backwardHigh) / 2;
-            if (TryLayoutAndPush(drag, mid, false, apply: false))
-            {
-                backwardHigh = mid;
-            }
-            else
-            {
-                backwardLow = mid;
-            }
-        }
-
-        return backwardHigh;
+    private ZoneBounds[] CollectBystanderBounds(SplitterDragState drag)
+    {
+        return _state.Zones
+            .Where(zone => !zone.IsCollapsed &&
+                           !drag.Firsts.Contains(zone) &&
+                           !drag.Seconds.Contains(zone))
+            .Select(GetVisualBounds)
+            .ToArray();
     }
 
     /// <summary>
-    /// Limit for the squeeze phase (line position mid). The pair's growing zone
-    /// must stop 12px before the nearest bystander zone in its own row/column
-    /// band, otherwise the squeeze would cover that zone before the translation
-    /// phase even starts.
-    /// </summary>
-    /// <summary>
     /// Simulates the layout for a candidate rail position and optionally applies
-    /// it. The pair never covers a bystander and every zone keeps the 12px
-    /// minimum gap: bystanders standing in the drag path are pushed along the
-    /// drag axis (cascading), and any push that would run out of room makes the
-    /// whole layout invalid, which lets the caller search for the extreme rail
-    /// position that still fits.
+    /// it via <see cref="ZoneSplitterResolver.TryGroupLayout"/>.
     /// </summary>
-    private bool TryLayoutAndPush(SplitterDragState drag, double lineMid, bool movingForward, bool apply)
+    private bool TryGroupLayoutAndPush(SplitterDragState drag, double lineMid, bool movingForward, bool apply)
     {
-        const double gap = 12;
-        var first = drag.FirstStart;
-        var second = drag.SecondStart;
-
-        ZoneBounds firstRect;
-        ZoneBounds secondRect;
-        if (drag.IsHorizontalLine)
-        {
-            var firstBottom = lineMid - drag.Gap / 2;
-            var secondTop = lineMid + drag.Gap / 2;
-            var secondBottom = Math.Max(second.Bottom, secondTop + SplitterMinimumHeight);
-            firstRect = new ZoneBounds(
-                first.X,
-                first.Y,
-                first.Width,
-                Math.Max(SplitterMinimumHeight, firstBottom - first.Y));
-            secondRect = new ZoneBounds(second.X, secondTop, second.Width, secondBottom - secondTop);
-        }
-        else
-        {
-            var firstRight = lineMid - drag.Gap / 2;
-            var secondLeft = lineMid + drag.Gap / 2;
-            var secondRight = Math.Max(second.Right, secondLeft + SplitterMinimumWidth);
-            firstRect = new ZoneBounds(
-                first.X,
-                first.Y,
-                Math.Max(SplitterMinimumWidth, firstRight - first.X),
-                first.Height);
-            secondRect = new ZoneBounds(secondLeft, second.Y, secondRight - secondLeft, second.Height);
-        }
-
-        if (firstRect.Width < SplitterMinimumWidth - 0.01 ||
-            firstRect.Height < SplitterMinimumHeight - 0.01 ||
-            secondRect.Width < SplitterMinimumWidth - 0.01 ||
-            secondRect.Height < SplitterMinimumHeight - 0.01)
-        {
-            return false;
-        }
-
-        var boundaryMax = drag.IsHorizontalLine ? MaximumZoneBottom : MaximumZoneRight;
-        if (firstRect.X < ZoneCard.HorizontalDesktopInset - 0.01 ||
-            firstRect.Y < 72 - 0.01 ||
-            secondRect.Right > boundaryMax + 0.01 ||
-            secondRect.Bottom > MaximumZoneBottom + 0.01)
-        {
-            return false;
-        }
-
         var bystanders = _state.Zones
             .Where(zone => !zone.IsCollapsed &&
-                           zone.Id != drag.First.Id &&
-                           zone.Id != drag.Second.Id &&
-                           !drag.Riders.Any(rider => rider.Zone.Id == zone.Id))
+                           !drag.Firsts.Contains(zone) &&
+                           !drag.Seconds.Contains(zone))
             .Select(zone => (Zone: zone, Bounds: GetVisualBounds(zone)))
             .ToList();
-        var block = new List<ZoneBounds> { firstRect, secondRect };
-        if (apply)
+        if (!ZoneSplitterResolver.TryGroupLayout(
+                drag.FirstStarts,
+                drag.SecondStarts,
+                bystanders.Select(item => item.Bounds).ToArray(),
+                drag.Gap,
+                drag.IsHorizontalLine,
+                lineMid,
+                movingForward,
+                ZoneCard.HorizontalDesktopInset,
+                72,
+                MaximumZoneRight,
+                MaximumZoneBottom,
+                out var layout))
         {
-            ApplyZoneVisualBounds(drag.First, firstRect);
-            ApplyZoneVisualBounds(drag.Second, secondRect);
+            return false;
         }
 
-        for (var iteration = 0; iteration <= bystanders.Count; iteration++)
+        if (!apply)
         {
-            var changed = false;
-            for (var index = 0; index < bystanders.Count; index++)
-            {
-                var (zone, bounds) = bystanders[index];
-                double? binding = null;
-                foreach (var member in block)
-                {
-                    var bandOverlap = drag.IsHorizontalLine
-                        ? bounds.X < member.Right && bounds.Right > member.X
-                        : bounds.Y < member.Bottom && bounds.Bottom > member.Y;
-                    if (!bandOverlap)
-                    {
-                        continue;
-                    }
-
-                    if (movingForward)
-                    {
-                        if (bounds.X >= member.Right - 0.01 &&
-                            (binding is null || member.Right > binding.Value))
-                        {
-                            binding = member.Right;
-                        }
-                    }
-                    else if (bounds.Right <= member.X + 0.01 &&
-                             (binding is null || member.X < binding.Value))
-                    {
-                        binding = member.X;
-                    }
-                }
-
-                if (binding is null)
-                {
-                    continue;
-                }
-
-                if (movingForward)
-                {
-                    var required = binding.Value + gap;
-                    if (bounds.X < required - 0.01)
-                    {
-                        var newX = required;
-                        if (newX > boundaryMax - bounds.Width + 0.01)
-                        {
-                            return false;
-                        }
-
-                        bounds = bounds with { X = newX };
-                        if (apply)
-                        {
-                            ApplyZoneVisualBounds(zone, bounds);
-                        }
-
-                        bystanders[index] = (zone, bounds);
-                        block.Add(bounds);
-                        changed = true;
-                    }
-                }
-                else
-                {
-                    var required = binding.Value - gap - bounds.Width;
-                    if (bounds.X > required + 0.01)
-                    {
-                        var newX = required;
-                        if (newX < ZoneCard.HorizontalDesktopInset - 0.01)
-                        {
-                            return false;
-                        }
-
-                        bounds = bounds with { X = newX };
-                        if (apply)
-                        {
-                            ApplyZoneVisualBounds(zone, bounds);
-                        }
-
-                        bystanders[index] = (zone, bounds);
-                        block.Add(bounds);
-                        changed = true;
-                    }
-                }
-            }
-
-            if (!changed)
-            {
-                break;
-            }
+            return true;
         }
 
-        // Final validation: every pair of zones keeps the minimum gap.
-        var all = new List<ZoneBounds> { firstRect, secondRect };
-        all.AddRange(bystanders.Select(item => item.Bounds));
-        for (var i = 0; i < all.Count; i++)
+        for (var index = 0; index < drag.Firsts.Count; index++)
         {
-            for (var j = i + 1; j < all.Count; j++)
-            {
-                var a = all[i];
-                var b = all[j];
-                var clear = a.Right + gap <= b.X + 0.01 ||
-                            b.Right + gap <= a.X + 0.01 ||
-                            a.Bottom + gap <= b.Y + 0.01 ||
-                            b.Bottom + gap <= a.Y + 0.01;
-                if (!clear)
-                {
-                    return false;
-                }
-            }
+            ApplyZoneVisualBounds(drag.Firsts[index], layout.Firsts[index]);
+        }
+
+        for (var index = 0; index < drag.Seconds.Count; index++)
+        {
+            ApplyZoneVisualBounds(drag.Seconds[index], layout.Seconds[index]);
+        }
+
+        for (var index = 0; index < bystanders.Count; index++)
+        {
+            ApplyZoneVisualBounds(bystanders[index].Zone, layout.Bystanders[index]);
         }
 
         return true;

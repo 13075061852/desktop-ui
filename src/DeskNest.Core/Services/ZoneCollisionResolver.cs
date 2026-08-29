@@ -5,6 +5,9 @@ public readonly record struct ZoneBounds(double X, double Y, double Width, doubl
     public double Right => X + Width;
 
     public double Bottom => Y + Height;
+
+    /// <summary>Sentinel meaning "no rest position recorded".</summary>
+    public static readonly ZoneBounds Empty = default;
 }
 
 public static class ZoneCollisionResolver

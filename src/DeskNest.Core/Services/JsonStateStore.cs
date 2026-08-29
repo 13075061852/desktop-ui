@@ -121,7 +121,17 @@ public sealed class JsonStateStore
             zone.Name = string.IsNullOrWhiteSpace(zone.Name) ? "未命名分区" : zone.Name.Trim();
             zone.AccentColor = string.IsNullOrWhiteSpace(zone.AccentColor) ? "#7DD3FC" : zone.AccentColor;
             zone.Width = Math.Max(150, zone.Width);
-            zone.Height = Math.Max(120, zone.Height);
+            // The expand clamp may legitimately store a height below the 150
+            // resize minimum: expanding into a narrow gap stops at the zone
+            // below instead of covering it. Keep those heights on load, so a
+            // re-expanded zone does not silently overlap its neighbour.
+            zone.Height = Math.Max(52, zone.Height);
+            // States saved before the rest-bounds feature have no home position;
+            // treat the saved layout as the zone's resting place.
+            if (!zone.HasRestBounds)
+            {
+                zone.CaptureRestBounds();
+            }
             zone.ViewMode = zone.ViewMode is "List" or "Icons" ? zone.ViewMode : "Icons";
             zone.Items ??= [];
 

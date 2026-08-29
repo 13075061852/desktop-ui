@@ -111,7 +111,8 @@
                         MouseEnter="OnHeaderMouseEnter" MouseLeave="OnHeaderMouseLeave"
                         MouseLeftButtonDown="OnHeaderMouseDown"
                         MouseMove="OnHeaderMouseMove"
-                        MouseLeftButtonUp="OnHeaderMouseUp">
+                        MouseLeftButtonUp="OnHeaderMouseUp"
+                        LostMouseCapture="OnHeaderLostMouseCapture">
                     <Grid>
                         <Grid x:Name="HeaderTitleHost" HorizontalAlignment="Left" VerticalAlignment="Center"
                               Margin="14,0,0,0">

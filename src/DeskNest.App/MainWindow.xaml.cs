@@ -594,6 +594,20 @@ public partial class MainWindow : System.Windows.Window
 
         foreach (var zone in _state.Zones)
         {
+            // A saved layout can drift outside the current canvas (display
+            // change, work-area change). Write the clamped position back to
+            // the model: rendering at one position while GetVisualBounds
+            // reports another desyncs splitter rails, guides and the next drag.
+            if (zone.X < ZoneCard.HorizontalDesktopInset)
+            {
+                zone.X = ZoneCard.HorizontalDesktopInset;
+            }
+
+            if (zone.Y < 72)
+            {
+                zone.Y = 72;
+            }
+
             var card = new ZoneCard(zone, _iconService)
             {
                 BoundsConstraint = ConstrainZoneBounds,
@@ -609,6 +623,8 @@ public partial class MainWindow : System.Windows.Window
                 UpdateZoneSplitters();
                 RequestSave();
             };
+            card.ZoneGestureCompleted += (_, _) => CommitZoneRest(zone);
+            card.CollapseStateChanged += (_, _) => OnZoneCollapseToggled(zone, card);
             card.DeleteRequested += (_, _) => DeleteZone(zone);
             card.NewFileRequested += (_, _) => CreateFileInZone(zone);
             card.NewFolderRequested += (_, _) => CreateFolderInZone(zone);
@@ -632,8 +648,8 @@ public partial class MainWindow : System.Windows.Window
                 card.SetSelectedItem(_selectedItemId);
             }
 
-            Canvas.SetLeft(card, Math.Max(ZoneCard.HorizontalDesktopInset, zone.X));
-            Canvas.SetTop(card, Math.Max(72, zone.Y));
+            Canvas.SetLeft(card, zone.X);
+            Canvas.SetTop(card, zone.Y);
             DesktopCanvas.Children.Add(card);
             _zoneCardMap[zone.Id] = card;
         }
@@ -665,11 +681,37 @@ public partial class MainWindow : System.Windows.Window
         var obstacles = otherZones
             .Select(GetVisualBounds)
             .ToArray();
+        IReadOnlyList<ZoneBounds> obstacleList = obstacles;
 
         var minimumX = ZoneCard.HorizontalDesktopInset;
         const double minimumY = 72;
         var maximumRight = MaximumZoneRight;
         var maximumBottom = Math.Max(minimumY + 1, MaximumZoneBottom);
+
+        // A freshly expanded zone may legitimately cover a neighbour (expand
+        // covers instead of displacing). While the current bounds overlap, a
+        // same-size move must follow the pointer instead of jamming: every
+        // candidate would otherwise fail the gap check and freeze the zone.
+        var currentAvailable = ZoneCollisionResolver.IsAvailable(
+            current, obstacleList, 12, minimumX, minimumY, maximumRight, maximumBottom);
+        var isSameSizeMove = Math.Abs(current.Width - desired.Width) < 0.01 &&
+                             Math.Abs(current.Height - desired.Height) < 0.01;
+        if (!currentAvailable && isSameSizeMove)
+        {
+            return ZoneAlignmentResolver.Snap(
+                current,
+                desired,
+                desired,
+                obstacleList,
+                snapDistance: 10,
+                gap: 12,
+                minimumX,
+                minimumY,
+                maximumRight,
+                maximumBottom,
+                hysteresis,
+                stickyEscapeDistance: 8);
+        }
 
         var stackResize = ZoneStackResizeResolver.ReflowAdjacent(
             current,
@@ -683,13 +725,21 @@ public partial class MainWindow : System.Windows.Window
             maximumRight,
             maximumBottom);
         desired = stackResize.Desired;
-        obstacles = stackResize.Obstacles.ToArray();
-        ApplyCompressedObstacleBounds(otherZones, obstacles);
+        obstacleList = ZoneLayoutRelaxer.Relax(
+            stackResize.Obstacles,
+            otherZones.Select(GetRestBounds).ToArray(),
+            stackResize.Desired,
+            12,
+            minimumX,
+            minimumY,
+            maximumRight,
+            maximumBottom);
+        ApplyCompressedObstacleBounds(otherZones, obstacleList);
 
         var collisionSafe = ZoneCollisionResolver.Constrain(
             current,
             desired,
-            obstacles,
+            obstacleList,
             12,
             minimumX,
             minimumY,
@@ -699,7 +749,7 @@ public partial class MainWindow : System.Windows.Window
             current,
             desired,
             collisionSafe,
-            obstacles,
+            obstacleList,
             snapDistance: 10,
             gap: 12,
             minimumX,
@@ -707,9 +757,98 @@ public partial class MainWindow : System.Windows.Window
             maximumRight,
             maximumBottom,
             hysteresis,
-            // Keep the snap hold region small so a zone can leave an edge/guide
-            // without feeling stuck during a drag.
-            stickyEscapeDistance: 12);
+            // Standard gaps between flush neighbours put guide pairs only
+            // 12px apart, so a hold region that wide lets guides chain-lock
+            // the edge and block alignment with a neighbour on the other
+            // side. 8px keeps the anti-flicker hold without trapping the
+            // edge: the pointer escapes after a few pixels of travel.
+            stickyEscapeDistance: 8);
+    }
+
+    /// <summary>Expand never displaces or covers the zones below: the expanded
+    /// height is limited to the free space above the nearest blocker (and the
+    /// work-area bottom). The user's intended height stays in the rest bounds
+    /// so the zone can grow back once the blocker moves away.</summary>
+    private void OnZoneCollapseToggled(ZoneModel zone, ZoneCard card)
+    {
+        Canvas.SetZIndex(card, zone.IsCollapsed ? 0 : 1);
+        if (zone.IsCollapsed)
+        {
+            return;
+        }
+
+        var limitBottom = MaximumZoneBottom;
+        foreach (var other in _state.Zones)
+        {
+            if (other.Id == zone.Id)
+            {
+                continue;
+            }
+
+            var otherBounds = GetVisualBounds(other);
+            var standsBelow = otherBounds.Y >= zone.Y + 52 - 0.01;
+            var overlapsHorizontally = zone.X < otherBounds.Right - 0.01 &&
+                                       zone.X + zone.Width > otherBounds.X + 0.01;
+            if (standsBelow && overlapsHorizontally)
+            {
+                limitBottom = Math.Min(limitBottom, otherBounds.Y - 12);
+            }
+        }
+
+        var available = limitBottom - zone.Y;
+        if (zone.Height > available + 0.01)
+        {
+            zone.Height = Math.Max(52, available);
+        }
+    }
+
+    private static ZoneBounds GetRestBounds(ZoneModel zone)
+    {
+        if (!zone.HasRestBounds)
+        {
+            zone.CaptureRestBounds();
+        }
+
+        return new ZoneBounds(zone.RestX, zone.RestY, zone.RestWidth, zone.RestHeight);
+    }
+
+    /// <summary>A direct user gesture (header move, resize) finished: the final
+    /// bounds become the zone's home, the arrangement the layout relaxes
+    /// toward when space frees up later.</summary>
+    private void CommitZoneRest(ZoneModel zone)
+    {
+        zone.CaptureRestBounds();
+        RelaxNeighboursTowardRest();
+        RequestSave();
+    }
+
+    /// <summary>Walks every non-interacting zone back toward its rest bounds
+    /// where possible; used after a gesture commits, after a zone deletion and
+    /// whenever the layout may have freed space.</summary>
+    private void RelaxNeighboursTowardRest()
+    {
+        var minimumX = ZoneCard.HorizontalDesktopInset;
+        const double minimumY = 72;
+        var maximumRight = MaximumZoneRight;
+        var maximumBottom = Math.Max(minimumY + 1, MaximumZoneBottom);
+        if (_state.Zones.Count == 0)
+        {
+            return;
+        }
+
+        // No anchored zone: every zone may relax. The virtual anchor sits far
+        // outside the canvas so it never blocks a candidate.
+        var anchor = new ZoneBounds(minimumX - 10000, minimumY - 10000, 0, 0);
+        var relaxed = ZoneLayoutRelaxer.Relax(
+            _state.Zones.Select(GetVisualBounds).ToArray(),
+            _state.Zones.Select(GetRestBounds).ToArray(),
+            anchor,
+            12,
+            minimumX,
+            minimumY,
+            maximumRight,
+            maximumBottom);
+        ApplyCompressedObstacleBounds(_state.Zones, relaxed);
     }
 
     private void ApplyCompressedObstacleBounds(IReadOnlyList<ZoneModel> zones, IReadOnlyList<ZoneBounds> bounds)
@@ -808,6 +947,12 @@ public partial class MainWindow : System.Windows.Window
                 foreach (var zone in _state.Zones)
                 {
                     zone.X += horizontalShift;
+                    // Keep the home position aligned with the rigid shift so
+                    // relaxation does not pull zones back off-screen.
+                    if (zone.HasRestBounds)
+                    {
+                        zone.RestX += horizontalShift;
+                    }
                 }
 
                 adjusted = true;
@@ -826,6 +971,10 @@ public partial class MainWindow : System.Windows.Window
                 foreach (var zone in _state.Zones)
                 {
                     zone.Y += verticalShift;
+                    if (zone.HasRestBounds)
+                    {
+                        zone.RestY += verticalShift;
+                    }
                 }
 
                 adjusted = true;
@@ -892,6 +1041,26 @@ public partial class MainWindow : System.Windows.Window
             }
 
             placed.Add(bounds);
+        }
+
+        // A rest position that drifted out of the canvas (or clashes with the
+        // normalized layout) would pull zones around right after startup;
+        // re-anchor invalid home positions to the normalized arrangement.
+        foreach (var zone in _state.Zones)
+        {
+            if (!zone.HasRestBounds)
+            {
+                zone.CaptureRestBounds();
+                continue;
+            }
+
+            var rest = new ZoneBounds(zone.RestX, zone.RestY, zone.RestWidth, zone.RestHeight);
+            var restInside = rest.X >= minimumX - 0.01 && rest.Y >= 72 - 0.01 &&
+                             rest.Right <= maximumRight + 0.01 && rest.Bottom <= maximumBottom + 0.01;
+            if (!restInside)
+            {
+                zone.CaptureRestBounds();
+            }
         }
 
         return adjusted;
@@ -1743,6 +1912,9 @@ public partial class MainWindow : System.Windows.Window
     private void DeleteZone(ZoneModel zone)
     {
         _state.Zones.Remove(zone);
+        // Freeing the space lets neighbours that had yielded for this zone
+        // walk back toward their home positions.
+        RelaxNeighboursTowardRest();
         RenderZones();
         RequestSave();
         ShowStatus("分区已删除，真实文件未受影响");
@@ -1763,7 +1935,7 @@ public partial class MainWindow : System.Windows.Window
 
     private static ZoneModel CreateZone(string categoryKey, string name, string accent)
     {
-        return new ZoneModel
+        var zone = new ZoneModel
         {
             CategoryKey = categoryKey,
             Name = name,
@@ -1771,6 +1943,8 @@ public partial class MainWindow : System.Windows.Window
             Width = 320,
             Height = 230
         };
+        zone.CaptureRestBounds();
+        return zone;
     }
 
     private void OnOrganizeClick(object sender, RoutedEventArgs e) => OrganizeDesktop(showNotification: false);

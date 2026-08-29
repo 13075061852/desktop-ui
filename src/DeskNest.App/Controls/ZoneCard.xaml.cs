@@ -171,6 +171,15 @@ public partial class ZoneCard : UserControl
     internal bool HasOpenTransientMenu => _openContextMenu?.IsOpen == true;
 
     internal event EventHandler? ModelChanged;
+
+    /// <summary>Raised after the collapse toggle flips and before the expand
+    /// animation starts; the overlay can limit the expanded height here.</summary>
+    internal event EventHandler? CollapseStateChanged;
+
+    /// <summary>Raised once when a direct user gesture on this zone (header
+    /// move or resize) finishes; the zone's final bounds become its rest
+    /// bounds so yielded neighbours can later relax around the new layout.</summary>
+    internal event EventHandler? ZoneGestureCompleted;
     internal event EventHandler? DeleteRequested;
     internal event EventHandler? NewFileRequested;
     internal event EventHandler? NewFolderRequested;
@@ -790,8 +799,17 @@ public partial class ZoneCard : UserControl
 
     private void OnHeaderMouseMove(object sender, MouseEventArgs e)
     {
-        if (!_draggingHeader || e.LeftButton != MouseButtonState.Pressed || Parent is not IInputElement parent)
+        if (!_draggingHeader)
         {
+            return;
+        }
+
+        // The button can be released without a MouseUp reaching us (capture
+        // stolen by a system gesture, window deactivated, etc.). Ending the
+        // drag here keeps the header from staying stuck in dragging state.
+        if (e.LeftButton != MouseButtonState.Pressed || Parent is not IInputElement parent)
+        {
+            EndHeaderDrag();
             return;
         }
 
@@ -818,13 +836,30 @@ public partial class ZoneCard : UserControl
             return;
         }
 
-        _draggingHeader = false;
         _capturedHeader?.ReleaseMouseCapture();
+        EndHeaderDrag();
+        e.Handled = true;
+    }
+
+    private void OnHeaderLostMouseCapture(object sender, MouseEventArgs e)
+    {
+        // ReleaseMouseCapture in OnHeaderMouseUp also raises this event; the
+        // flag is already cleared then, so only an unexpected capture loss
+        // (Alt+Tab, a modal dialog, a crash in another handler) lands here.
+        if (_draggingHeader)
+        {
+            EndHeaderDrag();
+        }
+    }
+
+    private void EndHeaderDrag()
+    {
+        _draggingHeader = false;
         _capturedHeader = null;
         _snapHysteresis.Reset();
         AlignmentGuidesChanged?.Invoke(null, null);
         ModelChanged?.Invoke(this, EventArgs.Empty);
-        e.Handled = true;
+        ZoneGestureCompleted?.Invoke(this, EventArgs.Empty);
     }
 
     private void OnResizeDragStarted(object sender, DragStartedEventArgs e)
@@ -869,6 +904,7 @@ public partial class ZoneCard : UserControl
             RenderItems();
         }
         ModelChanged?.Invoke(this, EventArgs.Empty);
+        ZoneGestureCompleted?.Invoke(this, EventArgs.Empty);
     }
 
     private ZoneBounds GetDesiredResizeBounds(string direction)
@@ -920,6 +956,9 @@ public partial class ZoneCard : UserControl
     {
         var collapse = !Model.IsCollapsed;
         Model.IsCollapsed = collapse;
+        // Fires before the animation so a subscriber can limit the expanded
+        // height to the free space first; AnimateCollapseChange reads it.
+        CollapseStateChanged?.Invoke(this, EventArgs.Empty);
         AnimateCollapseChange(collapse);
         ModelChanged?.Invoke(this, EventArgs.Empty);
     }
