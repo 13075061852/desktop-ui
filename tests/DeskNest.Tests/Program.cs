@@ -716,6 +716,80 @@ var tests = new List<(string Name, Action Run)>
             Assert.Equal("Dark", recovered.Theme);
         });
     }),
+    ("concurrent saves use snapshots and leave no temporary files", () =>
+    {
+        WithTempDirectory(root =>
+        {
+            var store = new JsonStateStore(Path.Combine(root, "state.json"));
+            var state = AppState.CreateDefault();
+            var pending = new List<Task>();
+            for (var index = 0; index < 40; index++)
+            {
+                state.Zones[0].Name = $"revision-{index}";
+                pending.Add(store.SaveAsync(state));
+            }
+            state.Zones[0].Name = "unsaved-change";
+            Task.WhenAll(pending).GetAwaiter().GetResult();
+            var actual = store.LoadAsync().GetAwaiter().GetResult();
+            Assert.Equal("revision-39", actual.Zones[0].Name);
+            Assert.Equal(0, Directory.GetFiles(root, "*.tmp").Length);
+        });
+    }),
+    ("saving after recovery preserves a healthy backup", () =>
+    {
+        WithTempDirectory(root =>
+        {
+            var path = Path.Combine(root, "state.json");
+            var store = new JsonStateStore(path);
+            var state = AppState.CreateDefault();
+            state.Theme = "Dark";
+            store.SaveAsync(state).GetAwaiter().GetResult();
+            store.SaveAsync(state).GetAwaiter().GetResult();
+            File.WriteAllText(path, "{broken");
+            state.Theme = "Light";
+            store.SaveAsync(state).GetAwaiter().GetResult();
+            Assert.Equal("Light", store.LoadAsync().GetAwaiter().GetResult().Theme);
+            File.WriteAllText(path, "{broken-again");
+            Assert.Equal("Dark", store.LoadAsync().GetAwaiter().GetResult().Theme);
+        });
+    }),
+    ("cancelled save preserves primary and permits subsequent saves", () =>
+    {
+        WithTempDirectory(root =>
+        {
+            var store = new JsonStateStore(Path.Combine(root, "state.json"));
+            var state = AppState.CreateDefault();
+            state.Theme = "Dark";
+            store.SaveAsync(state).GetAwaiter().GetResult();
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+            state.Theme = "Light";
+            var cancelled = false;
+            try { store.SaveAsync(state, cancellation.Token).GetAwaiter().GetResult(); }
+            catch (OperationCanceledException) { cancelled = true; }
+            Assert.Equal(true, cancelled);
+            Assert.Equal("Dark", store.LoadAsync().GetAwaiter().GetResult().Theme);
+            store.SaveAsync(state).GetAwaiter().GetResult();
+            Assert.Equal("Light", store.LoadAsync().GetAwaiter().GetResult().Theme);
+            Assert.Equal(0, Directory.GetFiles(root, "*.tmp").Length);
+        });
+    }),
+    ("state normalization removes null entries and repairs duplicate identities", () =>
+    {
+        WithTempDirectory(root =>
+        {
+            var path = Path.Combine(root, "state.json");
+            var id = Guid.NewGuid();
+            File.WriteAllText(path, $$"""
+                {"zones":[null,{"id":"{{id}}","items":[null,{"id":"{{id}}"},{"id":"{{id}}"}]},{"id":"{{id}}"}]}
+                """);
+            var state = new JsonStateStore(path).LoadAsync().GetAwaiter().GetResult();
+            Assert.Equal(2, state.Zones.Count);
+            Assert.Equal(2, state.Zones.Select(zone => zone.Id).Distinct().Count());
+            Assert.Equal(2, state.Zones[0].Items.Count);
+            Assert.Equal(2, state.Zones[0].Items.Select(item => item.Id).Distinct().Count());
+        });
+    }),
     ("missing state returns safe defaults", () =>
     {
         WithTempDirectory(root =>

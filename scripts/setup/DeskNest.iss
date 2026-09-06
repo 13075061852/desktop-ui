@@ -60,7 +60,7 @@ begin
   Result := True;
 end;
 
-// 检查机器上是否已安装 .NET 8（或更高）桌面运行时（框架依赖发布需要）
+// 框架依赖发布要求 .NET 8，默认不跨主版本使用 .NET 9/10。
 function HasDesktopRuntime8(): Boolean;
 var
   base, name: String;
@@ -81,7 +81,7 @@ begin
       begin
         name := find.Name;
         major := StrToIntDef(Copy(name, 1, Pos('.', name + '.') - 1), 0);
-        if major >= 8 then
+        if major = 8 then
           Result := True;
       end;
     until not FindNext(find) or Result;
@@ -94,7 +94,6 @@ function InitializeSetup(): Boolean;
 var
   Code: Integer;
 begin
-  KillRunningApp();
   if not HasDesktopRuntime8() then
   begin
     if MsgBox('栖格需要 Microsoft .NET 8 Desktop Runtime (x64)，当前电脑未安装。' #13#10 #13#10
@@ -106,6 +105,13 @@ begin
   end
   else
     Result := True;
+end;
+
+// 用户确认安装并通过依赖检查后才结束旧版，取消向导不影响运行中的软件。
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  KillRunningApp();
+  Result := '';
 end;
 
 function InitializeUninstall(): Boolean;

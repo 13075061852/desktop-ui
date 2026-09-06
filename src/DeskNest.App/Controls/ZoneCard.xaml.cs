@@ -154,6 +154,8 @@ public partial class ZoneCard : UserControl
         Loaded += (_, _) => UpdateHeaderPresentation(animate: false);
         Unloaded += (_, _) => EndLiveReflow();
         SizeChanged += (_, _) => UpdateHeaderPresentation(animate: false);
+        HeaderSurface.IsKeyboardFocusWithinChanged += (_, _) => UpdateHeaderPresentation(animate: true);
+        BodyScroller.SizeChanged += (_, _) => UpdateListTileWidths();
         ApplyModel();
     }
 
@@ -248,6 +250,7 @@ public partial class ZoneCard : UserControl
         TitleEditor.Background = new SolidColorBrush(lightTheme
             ? Color.FromArgb(232, 255, 255, 255)
             : Color.FromArgb(38, 255, 255, 255));
+        TitleEditor.CaretBrush = foreground;
         TitleText.Foreground = foreground;
         TitleEditor.Foreground = foreground;
         CollapseButton.Foreground = muted;
@@ -390,7 +393,7 @@ public partial class ZoneCard : UserControl
         _dragLayoutOrigins.Clear();
         ItemsPanel.Children.Clear();
         var iconTileWidth = Math.Max(76, _iconSize + 34);
-        var listTileWidth = Math.Max(120, Model.Width - 28);
+        var listTileWidth = GetListTileWidth();
 
         foreach (var item in Model.Items)
         {
@@ -404,13 +407,33 @@ public partial class ZoneCard : UserControl
         {
             ItemsPanel.Children.Add(new TextBlock
             {
-                Text = "拖入文件，或点击“一键整理”",
+                Text = "拖入文件到此分区\n也可右键新建，或使用“一键整理”",
+                TextWrapping = TextWrapping.Wrap,
+                LineHeight = 22,
+                MaxWidth = Math.Max(80, Model.Width - 52),
                 Foreground = _lightTheme
                     ? new SolidColorBrush(Color.FromRgb(82, 94, 112))
                     : (Brush)FindResource("TextMutedBrush"),
                 FontSize = 12,
                 Margin = new Thickness(10, 16, 0, 0)
             });
+        }
+    }
+
+    private double GetListTileWidth() => Math.Max(1,
+        (BodyScroller.ViewportWidth > 0 ? BodyScroller.ViewportWidth : Math.Max(1, Model.Width - 22)) - 4);
+
+    private void UpdateListTileWidths()
+    {
+        if (Model.ViewMode != "List")
+        {
+            return;
+        }
+
+        var width = GetListTileWidth();
+        foreach (var tile in ItemsPanel.Children.OfType<Border>())
+        {
+            tile.Width = width;
         }
     }
 
@@ -523,7 +546,8 @@ public partial class ZoneCard : UserControl
                 ? Color.FromArgb(78, 40, 154, 137)
                 : Color.FromArgb(88, 118, 215, 196));
             border.BorderBrush = (Brush)FindResource("AccentBrush");
-            border.BorderThickness = new Thickness(2);
+            // Keep the content inset stable while a drag crosses a folder.
+            border.BorderThickness = new Thickness(1);
             border.Effect = new DropShadowEffect
             {
                 BlurRadius = 14,
@@ -546,7 +570,18 @@ public partial class ZoneCard : UserControl
             return;
         }
 
-        border.Background = isHovered ? (Brush)FindResource("PanelHoverBrush") : Brushes.Transparent;
+        var hoverColor = isHovered
+            ? (_lightTheme ? Color.FromArgb(24, 38, 70, 90) : Color.FromArgb(32, 255, 255, 255))
+            : Colors.Transparent;
+        var previousColor = (border.Background as SolidColorBrush)?.Color ?? Colors.Transparent;
+        var hoverBrush = new SolidColorBrush(hoverColor);
+        border.Background = hoverBrush;
+        if (SystemParameters.ClientAreaAnimation && previousColor != hoverColor)
+        {
+            hoverBrush.BeginAnimation(SolidColorBrush.ColorProperty,
+                new ColorAnimation(previousColor, hoverColor, TimeSpan.FromMilliseconds(110))
+                { FillBehavior = FillBehavior.Stop });
+        }
         border.BorderBrush = Brushes.Transparent;
         border.BorderThickness = new Thickness(1);
         border.Effect = null;
@@ -733,14 +768,15 @@ public partial class ZoneCard : UserControl
             return;
         }
 
-        HeaderAccessories.IsHitTestVisible = _headerActionsVisible;
-        HeaderTitleHost.MaxWidth = Math.Max(36, HeaderSurface.ActualWidth - (_headerActionsVisible ? 90 : 28));
+        var showActions = _headerActionsVisible || HeaderSurface.IsKeyboardFocusWithin;
+        HeaderAccessories.IsHitTestVisible = showActions;
+        HeaderTitleHost.MaxWidth = Math.Max(36, HeaderSurface.ActualWidth - (showActions ? 90 : 28));
         HeaderTitleHost.UpdateLayout();
 
         var centeredOffset = Math.Max(0,
             (HeaderSurface.ActualWidth - HeaderTitleHost.ActualWidth) / 2 - HeaderTitleHost.Margin.Left);
-        var titleTarget = _headerActionsVisible ? 0 : centeredOffset;
-        var accessoriesTarget = _headerActionsVisible ? 1d : 0d;
+        var titleTarget = showActions ? 0 : centeredOffset;
+        var accessoriesTarget = showActions ? 1d : 0d;
 
         AnimateHeaderValue(HeaderTitleTranslation, TranslateTransform.XProperty, titleTarget, animate ? 170 : 0);
         AnimateHeaderValue(HeaderAccessories, OpacityProperty, accessoriesTarget, animate ? 140 : 0);
@@ -755,7 +791,7 @@ public partial class ZoneCard : UserControl
         var current = (double)target.GetValue(property);
         BeginAnimation(target, property, null);
         target.SetValue(property, value);
-        if (durationMilliseconds <= 0 || Math.Abs(current - value) < 0.01)
+        if (!SystemParameters.ClientAreaAnimation || durationMilliseconds <= 0 || Math.Abs(current - value) < 0.01)
         {
             return;
         }

@@ -13,6 +13,7 @@ public sealed class JsonStateStore
 
     private readonly string _statePath;
     private readonly string _backupPath;
+    private readonly SemaphoreSlim _saveGate = new(1, 1);
 
     public JsonStateStore(string? statePath = null)
     {
@@ -41,32 +42,50 @@ public sealed class JsonStateStore
     {
         ArgumentNullException.ThrowIfNull(state);
 
-        var directory = Path.GetDirectoryName(_statePath);
-        if (!string.IsNullOrWhiteSpace(directory))
+        // Capture on the caller's thread before yielding: UI edits must not mutate
+        // collections while an asynchronous serializer is enumerating them.
+        cancellationToken.ThrowIfCancellationRequested();
+        var snapshot = JsonSerializer.SerializeToUtf8Bytes(state, SerializerOptions);
+        await _saveGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var temporaryPath = _statePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
         {
-            Directory.CreateDirectory(directory);
-        }
+            var directory = Path.GetDirectoryName(_statePath);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
 
-        var temporaryPath = _statePath + ".tmp";
-        await using (var stream = new FileStream(
-                         temporaryPath,
-                         FileMode.Create,
-                         FileAccess.Write,
-                         FileShare.None,
-                         16 * 1024,
-                         FileOptions.Asynchronous | FileOptions.WriteThrough))
+            await using (var stream = new FileStream(
+                             temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                             16 * 1024, FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                await stream.WriteAsync(snapshot, cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            if (File.Exists(_statePath))
+            {
+                // Do not replace the last healthy backup with a corrupt primary.
+                var validPrimary = await TryLoadAsync(_statePath, cancellationToken).ConfigureAwait(false);
+                File.Replace(temporaryPath, _statePath, validPrimary is null ? null : _backupPath);
+            }
+            else
+            {
+                File.Move(temporaryPath, _statePath);
+            }
+        }
+        finally
         {
-            await JsonSerializer.SerializeAsync(stream, state, SerializerOptions, cancellationToken)
-                .ConfigureAwait(false);
-            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                File.Delete(temporaryPath);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            _saveGate.Release();
         }
-
-        if (File.Exists(_statePath))
-        {
-            File.Copy(_statePath, _backupPath, overwrite: true);
-        }
-
-        File.Move(temporaryPath, _statePath, overwrite: true);
     }
 
     private static async Task<AppState?> TryLoadAsync(string path, CancellationToken cancellationToken)
@@ -114,9 +133,16 @@ public sealed class JsonStateStore
             : "Center";
         state.Zones ??= [];
 
+        state.Zones.RemoveAll(zone => zone is null);
+        var zoneIds = new HashSet<Guid>();
+        var itemIds = new HashSet<Guid>();
         foreach (var zone in state.Zones)
         {
-            zone.Id = zone.Id == Guid.Empty ? Guid.NewGuid() : zone.Id;
+            if (zone.Id == Guid.Empty || !zoneIds.Add(zone.Id))
+            {
+                zone.Id = Guid.NewGuid();
+                zoneIds.Add(zone.Id);
+            }
             zone.CategoryKey = string.IsNullOrWhiteSpace(zone.CategoryKey) ? "other" : zone.CategoryKey;
             zone.Name = string.IsNullOrWhiteSpace(zone.Name) ? "未命名分区" : zone.Name.Trim();
             zone.AccentColor = string.IsNullOrWhiteSpace(zone.AccentColor) ? "#7DD3FC" : zone.AccentColor;
@@ -135,9 +161,14 @@ public sealed class JsonStateStore
             zone.ViewMode = zone.ViewMode is "List" or "Icons" ? zone.ViewMode : "Icons";
             zone.Items ??= [];
 
+            zone.Items.RemoveAll(item => item is null);
             foreach (var item in zone.Items)
             {
-                item.Id = item.Id == Guid.Empty ? Guid.NewGuid() : item.Id;
+                if (item.Id == Guid.Empty || !itemIds.Add(item.Id))
+                {
+                    item.Id = Guid.NewGuid();
+                    itemIds.Add(item.Id);
+                }
                 item.Path ??= string.Empty;
                 item.DisplayName = string.IsNullOrWhiteSpace(item.DisplayName)
                     ? Path.GetFileNameWithoutExtension(item.Path)

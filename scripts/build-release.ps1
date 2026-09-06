@@ -18,6 +18,9 @@ try {
     & $dotnet run --project '.\tests\DeskNest.Tests\DeskNest.Tests.csproj' -c Release
     if ($LASTEXITCODE -ne 0) { throw 'Core tests failed.' }
 
+    & $dotnet run --project '.\tests\DeskNest.UiSmoke\DeskNest.UiSmoke.csproj' -c Release
+    if ($LASTEXITCODE -ne 0) { throw 'UI smoke tests failed.' }
+
     if (Test-Path $dist) {
         Remove-Item $dist -Recurse -Force -ErrorAction SilentlyContinue
         if (Test-Path $dist) {
@@ -44,8 +47,17 @@ try {
     if (Test-Path $zip) { Remove-Item $zip -Force }
     Compress-Archive -Path (Join-Path $dist '*') -DestinationPath $zip -CompressionLevel Optimal
 
-    # 生成双击安装的 Setup 安装包（未安装 Inno Setup 时自动跳过）
+    # 清理旧 Setup，避免缺少 Inno Setup 时将上一版本误当作本次产物发布。
+    $setup = Join-Path $root 'dist\DeskNest-Setup.exe'
+    if (Test-Path $setup) { Remove-Item $setup -Force }
     & (Join-Path $PSScriptRoot 'make-setup.ps1')
+
+    $releaseFiles = @($zip)
+    if (Test-Path $setup) { $releaseFiles += $setup }
+    $releaseFiles | ForEach-Object {
+        $hash = (Get-FileHash $_ -Algorithm SHA256).Hash.ToLowerInvariant()
+        '{0}  {1}' -f $hash, (Split-Path $_ -Leaf)
+    } | Set-Content (Join-Path $root 'dist\SHA256SUMS.txt') -Encoding ASCII
 
     $size = (Get-ChildItem $dist -File -Recurse | Measure-Object Length -Sum).Sum
     Write-Host "`nDeskNest release is ready: $dist" -ForegroundColor Green

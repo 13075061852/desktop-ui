@@ -19,12 +19,19 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="ButtonSurface" Background="{TemplateBinding Background}" CornerRadius="10">
+                        <Border x:Name="ButtonSurface" Background="{TemplateBinding Background}" CornerRadius="8"
+                                BorderThickness="1" BorderBrush="Transparent">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="ButtonSurface" Property="Background" Value="#1F526170" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="ButtonSurface" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="ButtonSurface" Property="Opacity" Value="0.4" />
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="ButtonSurface" Property="Background" Value="#34526170" />
@@ -68,12 +75,12 @@
         </Style>
 
         <Style x:Key="SlimScrollBarStyle" TargetType="ScrollBar">
-            <Setter Property="Width" Value="3" />
+            <Setter Property="Width" Value="12" />
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ScrollBar">
-                        <Grid Width="3" Background="Transparent">
+                        <Grid Background="Transparent">
                             <Track x:Name="PART_Track" IsDirectionReversed="True" Focusable="False">
                                 <Track.DecreaseRepeatButton>
                                     <RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" Focusable="False" />
@@ -139,13 +146,13 @@
                                     HorizontalAlignment="Right" VerticalAlignment="Center"
                                     Margin="0,0,9,0" Opacity="0" IsHitTestVisible="False">
                             <Button x:Name="CollapseButton" Style="{StaticResource HeaderActionButtonStyle}"
-                                    ToolTip="折叠/展开" Click="OnCollapseClick">
+                                    ToolTip="折叠/展开" AutomationProperties.Name="折叠或展开分区" Click="OnCollapseClick">
                                 <Path x:Name="CollapseChevron" Data="M 2,6 L 6,2 L 10,6"
                                       Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                                       StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
                             </Button>
                             <Button x:Name="MoreButton" Style="{StaticResource HeaderActionButtonStyle}"
-                                    ToolTip="分区菜单" Click="OnMoreClick">
+                                    ToolTip="分区菜单" AutomationProperties.Name="分区菜单" Click="OnMoreClick">
                                 <StackPanel Orientation="Horizontal">
                                     <Ellipse Width="3" Height="3" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
                                     <Ellipse Width="3" Height="3" Margin="2,0" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
@@ -165,7 +172,7 @@
                         <WrapPanel x:Name="ItemsPanel" Orientation="Horizontal" />
                     </ScrollViewer>
                     <ScrollBar x:Name="SlimScrollBar" Orientation="Vertical" HorizontalAlignment="Right"
-                               Margin="0,9,5,10" Visibility="Collapsed"
+                               Margin="0,9,0,10" Visibility="Collapsed"
                                Style="{StaticResource SlimScrollBarStyle}" Scroll="OnSlimScroll"
                                LostMouseCapture="OnSlimScrollBarLostMouseCapture" />
                 </Grid>
